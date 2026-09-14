@@ -1,0 +1,134 @@
+# ==============================================================================
+# Psychs GEO Platform v2.0.0-PROD - Frontend Deployment, Service & TLS Ingress
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: psychs-frontend-service
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-frontend
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  ports:
+    - port: 80
+      name: http
+      targetPort: 80
+  selector:
+    app: psychs-frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: psychs-frontend
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-frontend
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: psychs-frontend
+  template:
+    metadata:
+      labels:
+        app: psychs-frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # nginx user
+        runAsGroup: 101
+        fsGroup: 101
+      containers:
+        - name: frontend
+          image: ghcr.io/psychs-ai/psychs-frontend:v2.0.0-prod
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: psychs-ingress
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-ingress
+    app.kubernetes.io/part-of: psychs-geo-system
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - geo.psychs.ai
+        - app.psychs.ai
+      secretName: psychs-tls-cert
+  rules:
+    - host: geo.psychs.ai
+      http:
+        paths:
+          # Backend API & SSE Streams
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: psychs-backend-service
+                port:
+                  number: 8000
+          # Frontend SPA Static Assets
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: psychs-frontend-service
+                port:
+                  number: 80
+    - host: app.psychs.ai
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: psychs-backend-service
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: psychs-frontend-service
+                port:
+                  number: 80

@@ -1,0 +1,91 @@
+{
+  "ten_enterprise_prod_01": {
+    "tenant_id": "ten_enterprise_prod_01",
+    "tenant_name": "Psychs Enterprise Tenant",
+    "kms_tdk_arn": "arn:aws:kms:us-east-1:112233445566:key/mrk-89ef4812-70b1-4f77-8c31-psychs-tdk",
+    "key_state": "ACTIVE",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-01 00:00:00 UTC",
+    "is_data_recoverable": true
+  },
+  "ten_shred_cascade_99": {
+    "tenant_id": "ten_shred_cascade_99",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 10:00:41 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_2eab5f": {
+    "tenant_id": "ten_shred_cascade_2eab5f",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 10:09:53 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_e39165": {
+    "tenant_id": "ten_shred_cascade_e39165",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 10:10:26 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_7ea186": {
+    "tenant_id": "ten_shred_cascade_7ea186",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 10:15:32 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_0e81b7": {
+    "tenant_id": "ten_shred_cascade_0e81b7",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 10:16:01 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_508e3c": {
+    "tenant_id": "ten_shred_cascade_508e3c",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 12:12:43 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_f79796": {
+    "tenant_id": "ten_shred_cascade_f79796",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 12:31:36 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  },
+  "ten_shred_cascade_4b09c3": {
+    "tenant_id": "ten_shred_cascade_4b09c3",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 12:32:07 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
+  }
+}

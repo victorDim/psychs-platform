@@ -1,0 +1,128 @@
+# ==============================================================================
+# Psychs GEO Platform v2.0.0-PROD - Backend Deployment, Service, PDB & HPA
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: psychs-backend-service
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-backend
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  ports:
+    - port: 8000
+      name: http-api
+      targetPort: 8000
+  selector:
+    app: psychs-backend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: psychs-backend
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-backend
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: psychs-backend
+  template:
+    metadata:
+      labels:
+        app: psychs-backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: backend
+          image: ghcr.io/psychs-ai/psychs-backend:v2.0.0-prod
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: psychs-config
+            - secretRef:
+                name: psychs-secrets
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)"
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: psychs-backend-pdb
+  namespace: psychs-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: psychs-backend
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: psychs-backend-hpa
+  namespace: psychs-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: psychs-backend
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

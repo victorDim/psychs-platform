@@ -1,0 +1,65 @@
+# ==============================================================================
+# Psychs GEO Platform v2.0.0-PROD - Kubernetes Namespace & Configuration
+# ==============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-platform
+    app.kubernetes.io/part-of: psychs-geo-system
+    app.kubernetes.io/managed-by: gitops-cab
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: psychs-config
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-platform
+    app.kubernetes.io/component: configuration
+data:
+  PSYCHS_EXECUTION_MODE: "HYBRID_SANDBOX"
+  LOG_LEVEL: "INFO"
+  PORT: "8000"
+  
+  # Default Frontier AI Model Identifiers
+  OPENAI_MODEL: "gpt-6-astra"
+  PERPLEXITY_MODEL: "sonar-reasoning-pro"
+  GEMINI_MODEL: "gemini-3.7-flash"
+  ANTHROPIC_MODEL: "claude-fable-5.1"
+  DEEPSEEK_MODEL: "deepseek-reasoner"
+  GLM_MODEL: "glm-4-plus"
+  GROK_MODEL: "grok-3"
+  
+  # Connection Endpoints
+  DATABASE_HOST: "psychs-postgres.psychs-prod.svc.cluster.local"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "psychs_db"
+  REDIS_HOST: "psychs-redis.psychs-prod.svc.cluster.local"
+  REDIS_PORT: "6379"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: psychs-secrets
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-platform
+    app.kubernetes.io/component: secrets
+type: Opaque
+stringData:
+  # Database & Cache Credentials
+  POSTGRES_USER: "psychs_prod_admin"
+  POSTGRES_PASSWORD: "CHANGEME_ENTERPRISE_PG_PASSWORD_2026"
+  REDIS_PASSWORD: "CHANGEME_ENTERPRISE_REDIS_PASSWORD_2026"
+  
+  # Frontier AI Model API Keys (Set via KMS or Vault in production)
+  OPENAI_API_KEY: "sk-proj-prod-live-key"
+  PERPLEXITY_API_KEY: "pplx-prod-live-key"
+  GEMINI_API_KEY: "AIzaSy-prod-live-key"
+  ANTHROPIC_API_KEY: "sk-ant-prod-live-key"
+  DEEPSEEK_API_KEY: "sk-deepseek-prod-live-key"
+  GLM_API_KEY: "glm-prod-live-key"
+  GROK_API_KEY: "xai-prod-live-key"
+  PROXY_ROTATING_URL: "http://customer-enterprise:session-auto@brd.superproxy.io:22225"

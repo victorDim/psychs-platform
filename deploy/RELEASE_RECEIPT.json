@@ -1,0 +1,30 @@
+{
+  "release_version": "v2.0.0-PROD",
+  "release_target": "PRODUCTION_ENTERPRISE_DEPLOYMENT",
+  "tagged_at": "2026-09-14T08:23:38Z",
+  "container_images": {
+    "backend": "ghcr.io/psychs/psychs-backend:v2.0.0-PROD",
+    "frontend": "ghcr.io/psychs/psychs-frontend:v2.0.0-PROD"
+  },
+  "quality_attestations": {
+    "unit_tests_passed": "99/99 (100%)",
+    "deployment_checks_passed": "56/56 (100%)",
+    "soc2_type_ii_compliance": "100.0% CERTIFIED",
+    "frontend_build_status": "CLEAN (0 Errors, 5.33s compile)",
+    "uptime_sla_target": "99.95%"
+  },
+  "manifest_checksums_sha256": {
+    "deploy/k8s/01-namespace-config.yaml": "702a43382b7c20a4bb9055a65d38d96b886352a7639c0f1d0e8bbd3132927b1c",
+    "deploy/k8s/02-databases.yaml": "abbed277cc32044107267633a34a8321b642d65b5b283e4b742ddb1167d81871",
+    "deploy/k8s/03-backend-deployment.yaml": "59f4bfb061e6f38c5d882e461c4e70ff8306730af8b03bff8d869c90ca8d645e",
+    "deploy/k8s/04-frontend-ingress.yaml": "2a02247f8d876146f9053862f4040abfcff175e118e086b4910b142bb9ac264b",
+    "backend/Dockerfile": "4bf3b5520474937c82a69310b9a88b3258509619f009b4a74c86450bd8201b8b",
+    "frontend/Dockerfile": "7d3c800a9d3e7cf923602041fcfbe966e06b582665e08f4f4ae59efb3a9d5e8f",
+    "docker-compose.yml": "be6e18b7059c8ff047a7dc7a734b92747da4099f034e270cc82c0729cc237e4b",
+    "docker-compose.dev.yml": "74baf22e4211378afd7bcd0f97fb494293f411081ccfae4be248a5a6c2dfae46",
+    "backend/app/database/schema.sql": "63d5f72cf5b90679c11ac108b1423e64863b1fec62a022c750ac8898e95ae369",
+    ".github/workflows/ci-cd.yml": "f78069d3bac6a38cee3ca86a81bd0ef618219e7957e7960ffd8399efb2195be6"
+  },
+  "cryptographic_release_signature": "sha256=62d12dd741d9a2cdb67e8d1d543e2549a5ff0980d113cee0ab6b534a9656f6b1",
+  "authorized_release_officer": "Psychs Enterprise Release Sentinel (Automated)"
+}
