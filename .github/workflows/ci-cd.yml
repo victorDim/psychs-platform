@@ -65,10 +65,10 @@ jobs:
 
       - name: Dry-run validate K8s Manifests
         run: |
-          kubectl apply --dry-run=client -f deploy/k8s/01-namespace-config.yaml
-          kubectl apply --dry-run=client -f deploy/k8s/02-databases.yaml
-          kubectl apply --dry-run=client -f deploy/k8s/03-backend-deployment.yaml
-          kubectl apply --dry-run=client -f deploy/k8s/04-frontend-ingress.yaml
+          kubectl create --dry-run=client -f deploy/k8s/01-namespace-config.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client -f deploy/k8s/02-databases.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client -f deploy/k8s/03-backend-deployment.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client -f deploy/k8s/04-frontend-ingress.yaml -o yaml > /dev/null
 
   # ============================================================================
   # Stage 3: Container Build & Push to GHCR (Multi-Platform amd64/arm64)
