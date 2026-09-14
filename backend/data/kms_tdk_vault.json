@@ -87,5 +87,15 @@
     "last_rotated_at": "2026-09-14 12:32:07 UTC",
     "shred_completion_time_seconds": 0.42,
     "is_data_recoverable": false
+  },
+  "ten_shred_cascade_da0b0e": {
+    "tenant_id": "ten_shred_cascade_da0b0e",
+    "tenant_name": "Shredded Tenant",
+    "kms_tdk_arn": "[DESTROYED_KMS_KEY_RECORD]",
+    "key_state": "SHREDDED",
+    "created_at": "2026-06-01 00:00:00 UTC",
+    "last_rotated_at": "2026-09-14 14:39:20 UTC",
+    "shred_completion_time_seconds": 0.42,
+    "is_data_recoverable": false
   }
 }
