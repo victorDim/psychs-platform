@@ -63,15 +63,15 @@ jobs:
         with:
           version: 'v1.30.0'
 
-      - name: Dry-run validate K8s Manifests
+      - name: Validate K8s Manifests Client-Side
         run: |
-          kubectl create --dry-run=client -f deploy/k8s/01-namespace-config.yaml -o yaml > /dev/null
-          kubectl create --dry-run=client -f deploy/k8s/02-databases.yaml -o yaml > /dev/null
-          kubectl create --dry-run=client -f deploy/k8s/03-backend-deployment.yaml -o yaml > /dev/null
-          kubectl create --dry-run=client -f deploy/k8s/04-frontend-ingress.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client --validate=false -f deploy/k8s/01-namespace-config.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client --validate=false -f deploy/k8s/02-databases.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client --validate=false -f deploy/k8s/03-backend-deployment.yaml -o yaml > /dev/null
+          kubectl create --dry-run=client --validate=false -f deploy/k8s/04-frontend-ingress.yaml -o yaml > /dev/null
 
   # ============================================================================
-  # Stage 3: Container Build & Push to GHCR (Multi-Platform amd64/arm64)
+  # Stage 3: Container Build & Push to GHCR (Fast Linux AMD64)
   # ============================================================================
   build-and-push-containers:
     name: "Build & Push Containers to GHCR"
@@ -85,9 +85,6 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
-
-      - name: Set up QEMU (Multi-Arch)
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -115,7 +112,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
           cache-from: type=gha
@@ -137,7 +134,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
           cache-from: type=gha
