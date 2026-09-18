@@ -138,9 +138,14 @@ jobs:
     needs: [lint-and-test, validate-k8s]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    outputs:
+      backend-digest: ${{ steps.build-backend.outputs.digest }}
+      frontend-digest: ${{ steps.build-frontend.outputs.digest }}
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout Source Code
@@ -165,6 +170,7 @@ jobs:
             type=sha,format=long
 
       - name: Build & Push Backend Image
+        id: build-backend
         uses: docker/build-push-action@v5
         with:
           context: ./backend
@@ -173,6 +179,8 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -185,6 +193,7 @@ jobs:
             type=sha,format=long
 
       - name: Build & Push Frontend Image
+        id: build-frontend
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
@@ -193,6 +202,8 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           build-args: |
             VITE_API_BASE_URL=/api/v2
             VITE_OIDC_AUTHORITY=${{ vars.VITE_OIDC_AUTHORITY }}
@@ -201,6 +212,49 @@ jobs:
             VITE_OIDC_SCOPE=${{ vars.VITE_OIDC_SCOPE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan Backend Image for Fixable High/Critical Vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_BACKEND }}@${{ steps.build-backend.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Scan Frontend Image for Fixable High/Critical Vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_FRONTEND }}@${{ steps.build-frontend.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Keyless Sign Immutable Images
+        env:
+          BACKEND_DIGEST: ${{ steps.build-backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.build-frontend.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_BACKEND}@${BACKEND_DIGEST}"
+          cosign sign --yes "${IMAGE_FRONTEND}@${FRONTEND_DIGEST}"
+
+      - name: Attest Backend Build Provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.IMAGE_BACKEND }}
+          subject-digest: ${{ steps.build-backend.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest Frontend Build Provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.IMAGE_FRONTEND }}
+          subject-digest: ${{ steps.build-frontend.outputs.digest }}
+          push-to-registry: true
 
   # ============================================================================
   # Stage 4: Release candidate evidence. Production promotion requires a
@@ -218,5 +272,8 @@ jobs:
       - name: Record Release Candidate
         run: |
           echo "Images for commit $GITHUB_SHA were published to GHCR."
+          echo "Backend digest: ${{ needs.build-and-push-containers.outputs.backend-digest }}"
+          echo "Frontend digest: ${{ needs.build-and-push-containers.outputs.frontend-digest }}"
+          echo "Both digests passed vulnerability policy, carry OCI SBOM/provenance, and were keyless signed."
           echo "No production deployment was performed by this workflow."
           echo "Promote only after security review, migration validation, and rollback approval."
