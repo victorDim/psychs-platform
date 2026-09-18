@@ -58,7 +58,7 @@ jobs:
         run: |
           python -m compileall -q backend
           python backend/run_tests.py
-          python -m pytest -q backend/tests/test_v2_runtime.py
+          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_recovery_drill.py
 
       - name: Validate FastAPI Application and Offline Migration
         working-directory: backend
@@ -80,6 +80,20 @@ jobs:
         run: |
           python -m app.database.migrate
           python -m pytest -q tests/integration/test_postgres_rls.py
+
+      - name: Verify PostgreSQL Backup and Restore Controls
+        working-directory: backend
+        env:
+          MIGRATION_DATABASE_URL: postgresql://psychs_owner:ci-owner-password-not-for-production@127.0.0.1:5432/psychs_ci
+          DATABASE_URL: postgresql://psychs_app:ci-application-password-32-chars@127.0.0.1:5432/psychs_ci
+          DATABASE_APP_USER: psychs_app
+          DATABASE_APP_PASSWORD: ci-application-password-32-chars
+          RESTORE_DRILL_DATABASE: psychs_ci_restore_drill
+          PSYCHS_ALLOW_DESTRUCTIVE_RESTORE_DRILL: "true"
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client
+          python -m app.database.recovery_drill
 
       # --- Frontend TypeScript Verification ---
       - name: Setup Node.js 24

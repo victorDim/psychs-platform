@@ -4,7 +4,7 @@ Psychs is an AI brand-perception and Generative Engine Optimization platform. Th
 
 ## Current status
 
-This codebase is **not yet approved for production traffic**. Phase 0 hardening and the first Phase 1 control-plane slices are in place. Real identity-provider integration, frontend authentication, remaining domain migrations, and end-to-end staging validation remain release blockers. PostgreSQL migrations and cross-tenant RLS are now exercised against PostgreSQL 16 in CI.
+This codebase is **not yet approved for production traffic**. The production control-plane foundation, browser OIDC authentication, telemetry, and signed release pipeline are in place. Remaining domain migrations, a provider-specific staging identity exercise, durable background processing, and end-to-end staging validation remain release blockers. PostgreSQL migrations, cross-tenant RLS, and logical backup restoration are exercised against PostgreSQL 16 in CI.
 
 The software now fails closed by default:
 
@@ -43,7 +43,7 @@ python3 backend/run_tests.py
 
 The compatibility suite currently contains 117 tests, supplemented by dependency-backed v2 security tests and live PostgreSQL isolation tests in CI. Some legacy tests write JSON fixtures, so run them in a disposable checkout when preserving the working tree matters.
 
-Frontend verification requires Node.js 20:
+Frontend verification requires Node.js 24:
 
 ```bash
 cd frontend
@@ -91,10 +91,10 @@ Before starting Compose, generate separate strong values for `POSTGRES_PASSWORD`
 Before production promotion, all of the following are mandatory:
 
 1. Migrate remaining in-memory/class-level domain state to tenant-scoped PostgreSQL repositories and Redis-backed coordination.
-2. Integrate and exercise the selected OIDC provider, including PKCE, service identities, revocation, and step-up authentication.
-3. Add schema migrations, backup/restore tests, idempotent background jobs, and dead-letter handling.
-4. Add structured logs, request IDs, OpenTelemetry traces, actionable metrics, SLOs, and alert runbooks.
-5. Complete dependency locking, SBOM generation, image signing, SAST/SCA/secret scanning, and container scanning.
+2. Exercise the selected OIDC provider in staging, including service identities, revocation, and step-up authentication.
+3. Add idempotent background jobs, retry policy, and dead-letter handling; continue scheduled restore drills using [the PostgreSQL recovery runbook](docs/runbooks/postgres-recovery.md).
+4. Add actionable metrics, SLOs, dashboards, and alert runbooks on top of the existing structured logs, request IDs, and OpenTelemetry traces.
+5. Add dedicated SAST and secret-scanning gates on top of the existing dependency locks, SBOMs, signed images, provenance attestations, and container scanning.
 6. Exercise staging smoke tests, rollback, disaster recovery, load tests, and a third-party penetration test.
 7. Confirm that every customer-visible metric distinguishes observed, inferred, and synthetic evidence.
 

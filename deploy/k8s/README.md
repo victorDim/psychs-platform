@@ -8,7 +8,7 @@ Before applying them:
 2. Provision `psychs-runtime-secrets` externally. It must supply `database-url` for a non-owner/non-`BYPASSRLS` role, `redis-url`, exact CORS origins, and OIDC issuer/audience/JWKS settings consumed by the backend deployment. Environment-style secret keys may be supplied through `envFrom`; database owner credentials are forbidden.
 3. Provision `psychs-migration-secrets` separately with only `database-url`, using a short-lived database-owner credential.
 4. If using the integration-only in-cluster data manifest, provision `psychs-datastore-secrets` with `postgres-admin-user`, `postgres-admin-password`, `postgres-database`, and `redis-password`. Never mount this Secret into API pods.
-5. Prefer managed PostgreSQL and Redis with multi-zone failover, encryption, backups, point-in-time recovery, monitoring, and tested restore procedures. The bundled single-node data manifests are for integration environments only.
+5. Prefer managed PostgreSQL and Redis with multi-zone failover, encryption, backups, point-in-time recovery, monitoring, and tested restore procedures. The bundled single-node data manifests are for integration environments only. Schedule the [PostgreSQL recovery drill](../../docs/runbooks/postgres-recovery.md) against a disposable staging restore target.
 6. Apply the migration Job as a reviewed pre-deployment step and confirm its revision before rolling out API pods.
 7. Add environment-specific network policies or CNI FQDN policies for DNS, OIDC/JWKS, PostgreSQL, Redis, telemetry, and approved provider endpoints.
 8. Validate admission policy, image signatures, resource quotas, Pod Security Standards, rollback, and disaster recovery in staging.
