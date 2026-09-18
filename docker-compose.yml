@@ -137,6 +137,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v2}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:?VITE_OIDC_AUTHORITY must be set}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:?VITE_OIDC_CLIENT_ID must be set}
+        VITE_OIDC_AUDIENCE: ${VITE_OIDC_AUDIENCE:-psychs-api}
+        VITE_OIDC_SCOPE: ${VITE_OIDC_SCOPE:-openid profile email offline_access projects:read projects:write}
     container_name: psychs-frontend
     restart: unless-stopped
     depends_on:

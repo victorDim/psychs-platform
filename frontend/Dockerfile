@@ -9,6 +9,19 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Public SPA configuration is compiled into the Vite bundle. Never pass a
+# confidential client secret as a build argument.
+ARG VITE_API_BASE_URL=/api/v2
+ARG VITE_OIDC_AUTHORITY=
+ARG VITE_OIDC_CLIENT_ID=
+ARG VITE_OIDC_AUDIENCE=psychs-api
+ARG VITE_OIDC_SCOPE="openid profile email offline_access projects:read projects:write"
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL} \
+    VITE_OIDC_AUTHORITY=${VITE_OIDC_AUTHORITY} \
+    VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID} \
+    VITE_OIDC_AUDIENCE=${VITE_OIDC_AUDIENCE} \
+    VITE_OIDC_SCOPE=${VITE_OIDC_SCOPE}
+
 COPY package*.json ./
 RUN npm ci
 

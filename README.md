@@ -26,6 +26,8 @@ The new `/api/v2` foundation adds:
 - tenant-scoped project creation with idempotency and audit records;
 - tenant-scoped authoritative-source registration with canonical URL and SSRF validation;
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
+- browser OIDC Authorization Code + PKCE with session-scoped token storage;
+- a production control-plane UI that renders only authenticated `/api/v2` records;
 - dependency-aware startup/readiness and structured request logs.
 
 ## Local verification
@@ -46,6 +48,15 @@ cd frontend
 npm ci
 npm run build
 ```
+
+Production frontend builds require the public `VITE_OIDC_AUTHORITY`,
+`VITE_OIDC_CLIENT_ID`, and optional audience/scope values documented in
+`.env.example`. Never place a client secret in a `VITE_*` variable. The legacy
+simulation UI is available only from the Vite development server when
+`VITE_ENABLE_LEGACY_DEMO_UI=true`; production builds exclude that path and its
+synthetic fixtures. Configure the identity provider with exact callback and
+post-logout URLs, refresh-token rotation for the public client, and access-token
+claims for `sub`, `tenant_id`, `aud`, and the requested `scope` values.
 
 ## Local development API
 

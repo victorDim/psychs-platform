@@ -110,36 +110,23 @@ import {
   initialTenantKey
 } from '../mockData/defaultData';
 
+import { getAccessToken } from '../auth/oidc';
+
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
 const BASE_URL = (configuredBaseUrl || '/api/v1').replace(/\/$/, '');
-const DEMO_FALLBACK_ENABLED = import.meta.env.VITE_ENABLE_DEMO_FALLBACK === 'true';
-
-async function fetchWithFallback<T>(endpoint: string, options: RequestInit = {}, fallback: T): Promise<T> {
-  try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
-      ...options,
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
-    if (!res.ok) {
-      const error = new Error(`API request failed on ${endpoint}: ${res.status} ${res.statusText}`);
-      if (DEMO_FALLBACK_ENABLED) {
-        console.warn(`${error.message}. Explicit demo fallback is enabled.`);
-        return fallback;
-      }
-      throw error;
-    }
-    return await res.json();
-  } catch (err) {
-    if (DEMO_FALLBACK_ENABLED) {
-      console.warn(`Network error fetching ${endpoint}. Explicit demo fallback is enabled.`, err);
-      return fallback;
-    }
-    throw err;
-  }
+async function requestAuthenticated<T>(endpoint: string, options: RequestInit = {}, _removedFallback: T): Promise<T> {
+  const accessToken = await getAccessToken();
+  const res = await fetch(`${BASE_URL}${endpoint}`, {
+    ...options,
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      ...options.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`API request failed on ${endpoint}: ${res.status} ${res.statusText}`);
+  return res.json();
 }
 
 export const api = {
@@ -151,11 +138,11 @@ export const api = {
       Object.entries(params).forEach(([k, v]) => q.append(k, v.toString()));
       queryStr = `?${q.toString()}`;
     }
-    return fetchWithFallback<CompositePerceptionResult>(`/perception/score${queryStr}`, {}, initialCompositeScore);
+    return requestAuthenticated<CompositePerceptionResult>(`/perception/score${queryStr}`, {}, initialCompositeScore);
   },
 
   runAudit: async (brandName: string = 'Psychs', domain: string = 'psychs.ai') => {
-    return fetchWithFallback('/perception/audit', {
+    return requestAuthenticated('/perception/audit', {
       method: 'POST',
       body: JSON.stringify({ brand_name: brandName, domain })
     }, {
@@ -168,12 +155,12 @@ export const api = {
   },
 
   getColdPromptPanel: async (brand: string = 'Psychs') => {
-    return fetchWithFallback(`/perception/panel?brand_name=${brand}`, {}, []);
+    return requestAuthenticated(`/perception/panel?brand_name=${brand}`, {}, []);
   },
 
   // 1. Canaries & Drift Monitor
   getCanaryReport: async (): Promise<CanarySystemReport> => {
-    return fetchWithFallback<CanarySystemReport>('/canaries/report', {}, {
+    return requestAuthenticated<CanarySystemReport>('/canaries/report', {}, {
       total_canary_probes: 500,
       global_drift_index: 0.078,
       system_health_status: 'AUTOTUNED_RESILIENT',
@@ -206,7 +193,7 @@ export const api = {
 
   // 2. Adaptive Sampler
   getSamplerMetrics: async (): Promise<AdaptiveSamplerMetrics> => {
-    return fetchWithFallback<AdaptiveSamplerMetrics>('/sampler/metrics', {}, {
+    return requestAuthenticated<AdaptiveSamplerMetrics>('/sampler/metrics', {}, {
       total_queries_processed: 1250,
       stage_1_early_exit_count: 775,
       stage_2_escalated_count: 475,
@@ -218,7 +205,7 @@ export const api = {
   },
 
   testAdaptiveSample: async (query: string, forceEscalate: boolean = false): Promise<AdaptiveSampleDecision> => {
-    return fetchWithFallback<AdaptiveSampleDecision>('/sampler/adaptive', {
+    return requestAuthenticated<AdaptiveSampleDecision>('/sampler/adaptive', {
       method: 'POST',
       body: JSON.stringify({ query, force_escalate: forceEscalate })
     }, {
@@ -236,7 +223,7 @@ export const api = {
 
   // 3. GitOps & Headless Connectors
   createGitOpsPr: async (diffId: string): Promise<PullRequestResult> => {
-    return fetchWithFallback<PullRequestResult>('/gitops/pr', {
+    return requestAuthenticated<PullRequestResult>('/gitops/pr', {
       method: 'POST',
       body: JSON.stringify({ diff_id: diffId })
     }, {
@@ -253,7 +240,7 @@ export const api = {
   },
 
   getMultiSigWorkflow: async (): Promise<MultiSigApprovalStage[]> => {
-    return fetchWithFallback<MultiSigApprovalStage[]>('/gitops/multisig', {}, [
+    return requestAuthenticated<MultiSigApprovalStage[]>('/gitops/multisig', {}, [
       { stage_name: 'Stage 1: Author Drafting', required_role: 'SEO Specialist', approver_email: 'seo.lead@brand.com', is_approved: true, signature_hash: 'SIG-AUTH-8899AA', signed_timestamp: '2026-09-13 11:15 UTC' },
       { stage_name: 'Stage 2: Compliance Verification', required_role: 'Legal Counsel', approver_email: 'compliance@brand.com', is_approved: true, signature_hash: 'SIG-COMP-44BB22', signed_timestamp: '2026-09-13 13:20 UTC' },
       { stage_name: 'Stage 3: Executive Sign-off', required_role: 'VP of Marketing', approver_email: 'vp.marketing@brand.com', is_approved: false }
@@ -261,7 +248,7 @@ export const api = {
   },
 
   getHeadlessConnectors: async (): Promise<HeadlessConnector[]> => {
-    return fetchWithFallback<HeadlessConnector[]>('/gitops/connectors', {}, [
+    return requestAuthenticated<HeadlessConnector[]>('/gitops/connectors', {}, [
       { platform_name: 'Contentful', connector_type: 'HEADLESS_API (Apps SDK v4)', space_or_project_id: 'spc_ent_marketing_01', status: 'ACTIVE_SYNCED', last_export_timestamp: '2026-09-13 14:00 UTC' },
       { platform_name: 'Sanity.io', connector_type: 'HEADLESS_API (Studio V3)', space_or_project_id: 'prj_sanity_prod_89', status: 'ACTIVE_SYNCED', last_export_timestamp: '2026-09-13 12:45 UTC' },
       { platform_name: 'Adobe Experience Manager (AEM)', connector_type: 'ENTERPRISE_DISPATCHER', space_or_project_id: 'aem_cloud_emea_prod', status: 'ACTIVE_SYNCED', last_export_timestamp: '2026-09-12 19:30 UTC' },
@@ -271,7 +258,7 @@ export const api = {
 
   // 4. Econometric Causal Attribution
   getCausalAttribution: async (brand: string = 'Psychs'): Promise<CausalAttributionReport> => {
-    return fetchWithFallback<CausalAttributionReport>(`/attribution/causal-report?brand_name=${brand}`, {}, {
+    return requestAuthenticated<CausalAttributionReport>(`/attribution/causal-report?brand_name=${brand}`, {}, {
       campaign_name: `${brand} 30-Day GEO Causal Attribution`,
       time_series: [
         { date: '2026-08-14', observed_branded_queries: 1200, counterfactual_baseline: 1190, incremental_lift_percent: 0.8, generative_citation_rate: 54.4 },
@@ -295,15 +282,15 @@ export const api = {
 
   // Competitive Intelligence
   getSovAnalysis: async (brand: string = 'Psychs'): Promise<SovAnalysisResult> => {
-    return fetchWithFallback<SovAnalysisResult>(`/intelligence/sov?brand_name=${brand}`, {}, initialSov);
+    return requestAuthenticated<SovAnalysisResult>(`/intelligence/sov?brand_name=${brand}`, {}, initialSov);
   },
 
   getCitationGaps: async (brand: string = 'Psychs'): Promise<CitationGapAnalysisResult> => {
-    return fetchWithFallback<CitationGapAnalysisResult>(`/intelligence/citation-gaps?brand_name=${brand}`, {}, initialCitationGaps);
+    return requestAuthenticated<CitationGapAnalysisResult>(`/intelligence/citation-gaps?brand_name=${brand}`, {}, initialCitationGaps);
   },
 
   getWinLossDiagnosis: async (brand: string = 'Psychs'): Promise<WinLossSummary> => {
-    return fetchWithFallback<WinLossSummary>(`/intelligence/win-loss?brand_name=${brand}`, {}, initialWinLoss);
+    return requestAuthenticated<WinLossSummary>(`/intelligence/win-loss?brand_name=${brand}`, {}, initialWinLoss);
   },
 
   // GEO Optimization Engine
@@ -315,14 +302,14 @@ export const api = {
       apply_quotes: leversState?.quotes ?? true,
       apply_answer_first: leversState?.answerFirst ?? true
     };
-    return fetchWithFallback<OptimizationPlanResult>('/optimization/kdd-diff', {
+    return requestAuthenticated<OptimizationPlanResult>('/optimization/kdd-diff', {
       method: 'POST',
       body: JSON.stringify(body)
     }, initialOptimizationPlan);
   },
 
   getEntitySchemas: async (brand: string = 'Psychs'): Promise<EntitySchemaResult> => {
-    return fetchWithFallback<EntitySchemaResult>(`/optimization/entity-schemas?brand_name=${brand}`, {}, {
+    return requestAuthenticated<EntitySchemaResult>(`/optimization/entity-schemas?brand_name=${brand}`, {}, {
       brand_name: brand,
       organization_jsonld: { "@context": "https://schema.org", "@type": "Organization", "name": brand },
       service_jsonld: { "@context": "https://schema.org", "@type": "Service", "name": `${brand} GEO` },
@@ -333,7 +320,7 @@ export const api = {
   },
 
   getLlmsTxt: async (brand: string = 'Psychs'): Promise<LlmsTxtResult> => {
-    return fetchWithFallback<LlmsTxtResult>(`/optimization/llms-txt?brand_name=${brand}`, {}, {
+    return requestAuthenticated<LlmsTxtResult>(`/optimization/llms-txt?brand_name=${brand}`, {}, {
       brand_name: brand,
       llms_txt_content: `# ${brand}\n> Enterprise GEO Platform`,
       llms_full_txt_content: `# ${brand} Knowledge Base`,
@@ -344,11 +331,11 @@ export const api = {
   },
 
   getWebhooks: async (): Promise<WebhookEndpoint[]> => {
-    return fetchWithFallback<WebhookEndpoint[]>('/optimization/webhooks', {}, initialWebhooks);
+    return requestAuthenticated<WebhookEndpoint[]>('/optimization/webhooks', {}, initialWebhooks);
   },
 
   publishDiff: async (payload: { diffId: string; platform: string; environment: string; signature: string }) => {
-    return fetchWithFallback('/optimization/publish', {
+    return requestAuthenticated('/optimization/publish', {
       method: 'POST',
       body: JSON.stringify({
         diff_id: payload.diffId,
@@ -371,16 +358,16 @@ export const api = {
   },
 
   getRemeasurement: async (): Promise<RemeasurementCampaign> => {
-    return fetchWithFallback<RemeasurementCampaign>('/optimization/remeasurement', {}, initialRemeasurement);
+    return requestAuthenticated<RemeasurementCampaign>('/optimization/remeasurement', {}, initialRemeasurement);
   },
 
   // Economics & Router
   getUnitEconomics: async (): Promise<UnitEconomicsResult> => {
-    return fetchWithFallback<UnitEconomicsResult>('/router/unit-economics', {}, initialUnitEconomics);
+    return requestAuthenticated<UnitEconomicsResult>('/router/unit-economics', {}, initialUnitEconomics);
   },
 
   classifyTask: async (taskType: string) => {
-    return fetchWithFallback(`/router/classify?task_type=${encodeURIComponent(taskType)}`, {
+    return requestAuthenticated(`/router/classify?task_type=${encodeURIComponent(taskType)}`, {
       method: 'POST'
     }, {
       task_name: taskType,
@@ -395,15 +382,15 @@ export const api = {
 
   // Audit Logs & Security
   getAuditLogs: async (tierFilter: string = 'ALL'): Promise<AuditLogEntry[]> => {
-    return fetchWithFallback<AuditLogEntry[]>(`/audit/logs?tier_filter=${tierFilter}`, {}, initialAuditLogs);
+    return requestAuthenticated<AuditLogEntry[]>(`/audit/logs?tier_filter=${tierFilter}`, {}, initialAuditLogs);
   },
 
   getKmsTdkStatus: async (tenantId: string = 'ten_enterprise_prod_01'): Promise<TenantKeyStatus> => {
-    return fetchWithFallback<TenantKeyStatus>(`/security/kms-tdk?tenant_id=${tenantId}`, {}, initialTenantKey);
+    return requestAuthenticated<TenantKeyStatus>(`/security/kms-tdk?tenant_id=${tenantId}`, {}, initialTenantKey);
   },
 
   executeCryptoShred: async (tenantId: string = 'ten_enterprise_prod_01') => {
-    return fetchWithFallback('/security/crypto-shred', {
+    return requestAuthenticated('/security/crypto-shred', {
       method: 'POST',
       body: JSON.stringify({ tenant_id: tenantId })
     }, {
@@ -418,11 +405,11 @@ export const api = {
 
   // MCP Tools
   getMcpTools: async (): Promise<MCPToolDefinition[]> => {
-    return fetchWithFallback<MCPToolDefinition[]>('/mcp/tools', {}, initialMcpTools);
+    return requestAuthenticated<MCPToolDefinition[]>('/mcp/tools', {}, initialMcpTools);
   },
 
   executeMcpTool: async (toolName: string, args: Record<string, any>, level: number = 4, sig?: string) => {
-    return fetchWithFallback('/mcp/execute', {
+    return requestAuthenticated('/mcp/execute', {
       method: 'POST',
       body: JSON.stringify({
         tool_name: toolName,
@@ -441,7 +428,7 @@ export const api = {
 
   // API Key & Residential Proxy Gateway Settings
   getApiSettings: async () => {
-    return fetchWithFallback('/settings/api-keys', {}, {
+    return requestAuthenticated('/settings/api-keys', {}, {
       settings: {
         openai_api_key: 'sk-...4920',
         openai_model: 'gpt-6-astra',
@@ -477,7 +464,7 @@ export const api = {
   },
 
   updateApiSettings: async (settings: Partial<any>) => {
-    return fetchWithFallback('/settings/api-keys', {
+    return requestAuthenticated('/settings/api-keys', {
       method: 'POST',
       body: JSON.stringify(settings)
     }, {
@@ -487,7 +474,7 @@ export const api = {
   },
 
   testProviderConnection: async (provider: string) => {
-    return fetchWithFallback('/settings/test-connection', {
+    return requestAuthenticated('/settings/test-connection', {
       method: 'POST',
       body: JSON.stringify({ provider })
     }, {
@@ -503,11 +490,11 @@ export const api = {
   // Option 2: Background Task Queue & 24/7 Scheduled Audits API
   // ---------------------------------------------------------------------------
   getQueueJobs: async (limit: number = 50) => {
-    return fetchWithFallback(`/scheduler/jobs?limit=${limit}`, {}, []);
+    return requestAuthenticated(`/scheduler/jobs?limit=${limit}`, {}, []);
   },
 
   getQueueStats: async () => {
-    return fetchWithFallback('/scheduler/stats', {}, {
+    return requestAuthenticated('/scheduler/stats', {}, {
       total_jobs: 148,
       queued: 0,
       running: 1,
@@ -518,7 +505,7 @@ export const api = {
   },
 
   enqueueJob: async (name: string, task_type: string, payload: Record<string, any>, priority: string = 'MEDIUM') => {
-    return fetchWithFallback('/scheduler/jobs', {
+    return requestAuthenticated('/scheduler/jobs', {
       method: 'POST',
       body: JSON.stringify({ name, task_type, payload, priority })
     }, {
@@ -533,11 +520,11 @@ export const api = {
   },
 
   getAuditSchedules: async () => {
-    return fetchWithFallback('/scheduler/schedules', {}, []);
+    return requestAuthenticated('/scheduler/schedules', {}, []);
   },
 
   createAuditSchedule: async (schedule: any) => {
-    return fetchWithFallback('/scheduler/schedules', {
+    return requestAuthenticated('/scheduler/schedules', {
       method: 'POST',
       body: JSON.stringify(schedule)
     }, {
@@ -550,7 +537,7 @@ export const api = {
   },
 
   triggerAuditSchedule: async (schedule_id: string) => {
-    return fetchWithFallback('/scheduler/schedules/trigger', {
+    return requestAuthenticated('/scheduler/schedules/trigger', {
       method: 'POST',
       body: JSON.stringify({ schedule_id })
     }, {
@@ -560,11 +547,11 @@ export const api = {
   },
 
   getAlertWebhooks: async () => {
-    return fetchWithFallback('/webhooks/endpoints', {}, []);
+    return requestAuthenticated('/webhooks/endpoints', {}, []);
   },
 
   createAlertWebhook: async (endpoint: any) => {
-    return fetchWithFallback('/webhooks/endpoints', {
+    return requestAuthenticated('/webhooks/endpoints', {
       method: 'POST',
       body: JSON.stringify(endpoint)
     }, {
@@ -577,7 +564,7 @@ export const api = {
   },
 
   testPingWebhook: async (endpoint_id: string) => {
-    return fetchWithFallback('/webhooks/test-ping', {
+    return requestAuthenticated('/webhooks/test-ping', {
       method: 'POST',
       body: JSON.stringify({ endpoint_id })
     }, {
@@ -597,7 +584,7 @@ export const api = {
   // Option 3: Enterprise SSO & RBAC Security API
   // ---------------------------------------------------------------------------
   getSSOConfig: async () => {
-    return fetchWithFallback('/auth/sso/config', {}, {
+    return requestAuthenticated('/auth/sso/config', {}, {
       sso_enabled: true,
       provider_type: 'SAML_2_0',
       idp_entity_id: 'http://www.okta.com/exk984enterprise2026',
@@ -614,25 +601,25 @@ export const api = {
   },
 
   updateSSOConfig: async (config: any) => {
-    return fetchWithFallback('/auth/sso/config', {
+    return requestAuthenticated('/auth/sso/config', {
       method: 'POST',
       body: JSON.stringify(config)
     }, config);
   },
 
   getUsers: async () => {
-    return fetchWithFallback('/auth/users', {}, []);
+    return requestAuthenticated('/auth/users', {}, []);
   },
 
   updateUserRole: async (user_id: string, role: string) => {
-    return fetchWithFallback('/auth/users/role', {
+    return requestAuthenticated('/auth/users/role', {
       method: 'POST',
       body: JSON.stringify({ user_id, role })
     }, { user_id, role });
   },
 
   addUser: async (email: string, name: string, role: string, auth_method: string = 'SAML_OKTA') => {
-    return fetchWithFallback('/auth/users', {
+    return requestAuthenticated('/auth/users', {
       method: 'POST',
       body: JSON.stringify({ email, name, role, auth_method })
     }, {
@@ -648,11 +635,11 @@ export const api = {
   },
 
   getActiveSessions: async () => {
-    return fetchWithFallback('/auth/sessions', {}, []);
+    return requestAuthenticated('/auth/sessions', {}, []);
   },
 
   revokeSession: async (session_id: string) => {
-    return fetchWithFallback('/auth/sessions/revoke', {
+    return requestAuthenticated('/auth/sessions/revoke', {
       method: 'POST',
       body: JSON.stringify({ session_id })
     }, { session_id, revoked: true });
@@ -662,7 +649,7 @@ export const api = {
   // Option 3: Enterprise Metered Token Usage & Stripe Billing API
   // ---------------------------------------------------------------------------
   getSubscription: async () => {
-    return fetchWithFallback('/billing/subscription', {}, {
+    return requestAuthenticated('/billing/subscription', {}, {
       tier_id: 'ENTERPRISE_GROWTH',
       tier_name: 'Enterprise Growth',
       status: 'ACTIVE',
@@ -682,7 +669,7 @@ export const api = {
   },
 
   getTokenUsage: async () => {
-    return fetchWithFallback('/billing/usage', {}, {
+    return requestAuthenticated('/billing/usage', {}, {
       monthly_quota_tokens: 5000000,
       tokens_consumed_month: 1842310,
       tokens_remaining: 3157690,
@@ -700,25 +687,25 @@ export const api = {
   },
 
   getInvoices: async () => {
-    return fetchWithFallback('/billing/invoices', {}, []);
+    return requestAuthenticated('/billing/invoices', {}, []);
   },
 
   // ---------------------------------------------------------------------------
   // Option A: Executive Boardroom Reports & C-Suite Decks
   // ---------------------------------------------------------------------------
   getBoardDeck: async (brand: string = 'Psychs', type: string = 'QUARTERLY_BOARD_DECK', format: string = 'json') => {
-    return fetchWithFallback(`/reports/board-deck?brand_name=${brand}&type=${type}&format=${format}`, {}, null);
+    return requestAuthenticated(`/reports/board-deck?brand_name=${brand}&type=${type}&format=${format}`, {}, null);
   },
 
   generateBoardDeck: async (payload: { brand_name: string; report_type?: string; is_confidential?: boolean; custom_notes?: string }) => {
-    return fetchWithFallback('/reports/generate', {
+    return requestAuthenticated('/reports/generate', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, null);
   },
 
   getReportHistory: async (brand: string = 'Psychs') => {
-    return fetchWithFallback(`/reports/history?brand_name=${brand}`, {}, [
+    return requestAuthenticated(`/reports/history?brand_name=${brand}`, {}, [
       {
         report_id: `REP-${brand.toUpperCase().slice(0, 3)}-2026-Q3`,
         report_type: 'QUARTERLY_BOARD_DECK',
@@ -746,14 +733,14 @@ export const api = {
   // Option 1: Autonomous URL Crawler & Brand Ingestion Pipeline
   // ---------------------------------------------------------------------------
   crawlDomain: async (payload: { url_or_domain: string; crawl_depth?: string; strip_injections?: boolean; raw_html?: string }) => {
-    return fetchWithFallback('/ingestion/crawl', {
+    return requestAuthenticated('/ingestion/crawl', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, null);
   },
 
   getIngestedDomains: async () => {
-    return fetchWithFallback('/ingestion/history', {}, [
+    return requestAuthenticated('/ingestion/history', {}, [
       {
         ingest_id: 'ING-psychs-ai-01',
         domain: 'psychs.ai',
@@ -791,7 +778,7 @@ export const api = {
   // Option C: Multi-Region Geo-Distributed Proxy & Egress Gateway Monitor
   // ---------------------------------------------------------------------------
   getProxyClusterStatus: async (): Promise<ProxyClusterStatus> => {
-    return fetchWithFallback('/network/proxy-cluster', {}, {
+    return requestAuthenticated('/network/proxy-cluster', {}, {
       cluster_version: 'v2.0.0-PROD-GEO',
       total_active_nodes: 4250,
       total_residential_pool: 7600,
@@ -906,7 +893,7 @@ export const api = {
   },
 
   getLatencyMatrix: async (): Promise<EngineLatencyMetric[]> => {
-    return fetchWithFallback('/network/latency-matrix', {}, [
+    return requestAuthenticated('/network/latency-matrix', {}, [
       {
         engine_id: 'chatgpt_search',
         engine_name: 'ChatGPT Search (GPT-6)',
@@ -986,18 +973,18 @@ export const api = {
   },
 
   getProbeHistory: async (): Promise<SyntheticProbeResult[]> => {
-    return fetchWithFallback('/network/probes', {}, []);
+    return requestAuthenticated('/network/probes', {}, []);
   },
 
   dispatchNetworkProbe: async (payload: { region_id: string; target_engine: string }): Promise<SyntheticProbeResult | null> => {
-    return fetchWithFallback('/network/ping-probe', {
+    return requestAuthenticated('/network/ping-probe', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, null);
   },
 
   rotateTlsFingerprints: async (): Promise<any> => {
-    return fetchWithFallback('/network/rotate-tls', {
+    return requestAuthenticated('/network/rotate-tls', {
       method: 'POST',
       body: JSON.stringify({})
     }, { status: 'ROTATED' });
@@ -1007,7 +994,7 @@ export const api = {
   // Adversarial GEO Penetration Testing Studio
   // ---------------------------------------------------------------------------
   getPenTestReport: async (brand: string = 'Psychs'): Promise<PenTestReport> => {
-    return fetchWithFallback(`/pentest/report?brand_name=${brand}`, {}, {
+    return requestAuthenticated(`/pentest/report?brand_name=${brand}`, {}, {
       test_id: `PENTEST-${brand.toUpperCase().slice(0, 4)}-01`,
       brand_name: brand,
       timestamp: new Date().toISOString(),
@@ -1132,11 +1119,11 @@ export const api = {
   },
 
   getAttackVectors: async (): Promise<AdversarialAttackVector[]> => {
-    return fetchWithFallback('/pentest/vectors', {}, []);
+    return requestAuthenticated('/pentest/vectors', {}, []);
   },
 
   runPenTest: async (payload: { brand_name: string; attack_suite?: string[]; intensity?: string }): Promise<PenTestReport> => {
-    return fetchWithFallback('/pentest/run', {
+    return requestAuthenticated('/pentest/run', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1157,7 +1144,7 @@ export const api = {
   },
 
   applyDefensiveHardening: async (payload: { brand_name: string; vector_ids?: string[] }): Promise<HardeningPatchResult> => {
-    return fetchWithFallback('/pentest/harden', {
+    return requestAuthenticated('/pentest/harden', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1178,7 +1165,7 @@ export const api = {
   // Automated Knowledge Graph & Wikidata Entity Sync Studio
   // ---------------------------------------------------------------------------
   getKnowledgeGraphEntity: async (brand: string = 'Psychs'): Promise<KnowledgeGraphAuditReport> => {
-    return fetchWithFallback(`/knowledge-graph/entity?brand_name=${brand}`, {}, {
+    return requestAuthenticated(`/knowledge-graph/entity?brand_name=${brand}`, {}, {
       brand_name: brand,
       wikidata_qid: brand.toLowerCase() === 'stripe' ? 'Q16839396' : (brand.toLowerCase() === 'snowflake' ? 'Q60747299' : (brand.toLowerCase() === 'vercel' ? 'Q108749870' : 'Q129849201')),
       authority_score: 98.2,
@@ -1281,7 +1268,7 @@ export const api = {
   },
 
   executeSparqlQuery: async (query: string): Promise<any> => {
-    return fetchWithFallback(`/knowledge-graph/sparql?query=${encodeURIComponent(query)}`, {}, {
+    return requestAuthenticated(`/knowledge-graph/sparql?query=${encodeURIComponent(query)}`, {}, {
       head: { vars: ['property', 'propertyLabel', 'valueLabel'] },
       results: {
         bindings: [
@@ -1299,7 +1286,7 @@ export const api = {
   },
 
   syncKnowledgeGraph: async (payload: { brand_name: string }): Promise<KnowledgeGraphSyncResponse> => {
-    return fetchWithFallback('/knowledge-graph/sync', {
+    return requestAuthenticated('/knowledge-graph/sync', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1317,7 +1304,7 @@ export const api = {
   },
 
   generateQuickStatements: async (payload: { brand_name: string; claims?: any[] }): Promise<QuickStatementsPatch> => {
-    return fetchWithFallback('/knowledge-graph/quickstatements', {
+    return requestAuthenticated('/knowledge-graph/quickstatements', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1332,7 +1319,7 @@ export const api = {
   },
 
   getIndexWatchRadar: async (brandName: string = 'Psychs', daysHistory: number = 30): Promise<IndexWatchRadarReport> => {
-    return fetchWithFallback(`/indexwatch/radar?brand_name=${encodeURIComponent(brandName)}&days_history=${daysHistory}`, {}, {
+    return requestAuthenticated(`/indexwatch/radar?brand_name=${encodeURIComponent(brandName)}&days_history=${daysHistory}`, {}, {
       brand_name: brandName,
       composite_volatility_score: 61.2,
       system_status: 'HIGH',
@@ -1487,7 +1474,7 @@ export const api = {
   },
 
   getDetectedAlgorithmUpdates: async (limit: number = 10): Promise<DetectedAlgorithmUpdate[]> => {
-    return fetchWithFallback(`/indexwatch/updates?limit=${limit}`, {}, [
+    return requestAuthenticated(`/indexwatch/updates?limit=${limit}`, {}, [
       {
         update_id: 'ALGO-UPDT-2026.09-01',
         affected_engine: 'Google AI Overviews',
@@ -1504,7 +1491,7 @@ export const api = {
   },
 
   getEmergencyPlaybooks: async (): Promise<EmergencyHedgePlaybook[]> => {
-    return fetchWithFallback('/indexwatch/playbooks', {}, [
+    return requestAuthenticated('/indexwatch/playbooks', {}, [
       {
         playbook_id: 'HEDGE-GEO-01',
         title: 'Multi-Domain Citation Triangulation Injection',
@@ -1525,7 +1512,7 @@ export const api = {
   },
 
   triggerEmergencyPlaybook: async (payload: { playbook_id: string; brand_name?: string }): Promise<HedgeExecutionResult> => {
-    return fetchWithFallback('/indexwatch/playbooks/trigger', {
+    return requestAuthenticated('/indexwatch/playbooks/trigger', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1548,7 +1535,7 @@ export const api = {
   },
 
   getBotArmorTelemetry: async (brandName: string = 'Psychs', horizonHours: number = 24): Promise<BotArmorTelemetryReport> => {
-    return fetchWithFallback(`/network/bot-armor/telemetry?brand_name=${encodeURIComponent(brandName)}&horizon_hours=${horizonHours}`, {}, {
+    return requestAuthenticated(`/network/bot-armor/telemetry?brand_name=${encodeURIComponent(brandName)}&horizon_hours=${horizonHours}`, {}, {
       brand_name: brandName,
       total_bot_requests_24h: 168900,
       edge_bandwidth_saved_gb: 23.65,
@@ -1735,7 +1722,7 @@ export const api = {
   },
 
   getTrackedAiCrawlers: async (): Promise<AiBotCrawlerMetric[]> => {
-    return fetchWithFallback('/network/bot-armor/crawlers', {}, [
+    return requestAuthenticated('/network/bot-armor/crawlers', {}, [
       {
         bot_id: 'oai_searchbot',
         bot_name: 'OAI-SearchBot',
@@ -1754,7 +1741,7 @@ export const api = {
   },
 
   generateEdgeWafRules: async (payload: { provider: string; policy_mode: string; brand_name?: string }): Promise<EdgeWafRuleSet> => {
-    return fetchWithFallback('/network/bot-armor/waf-rules', {
+    return requestAuthenticated('/network/bot-armor/waf-rules', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1769,7 +1756,7 @@ export const api = {
   },
 
   setBotArmorPolicy: async (payload: { policy_mode: string }): Promise<PolicySwitchResult> => {
-    return fetchWithFallback('/network/bot-armor/set-policy', {
+    return requestAuthenticated('/network/bot-armor/set-policy', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1785,7 +1772,7 @@ export const api = {
 
   // Agency & White-Label Portal API Methods
   getAgencyOrganization: async (agencyId: string = 'ag-acrobat-global'): Promise<AgencyOrganization> => {
-    return fetchWithFallback(`/agency/organizations?agency_id=${agencyId}`, {}, {
+    return requestAuthenticated(`/agency/organizations?agency_id=${agencyId}`, {}, {
       agency_id: 'ag-acrobat-global',
       agency_name: 'Acrobat GEO Global Partners',
       primary_domain: 'acrobatgeo.io',
@@ -1820,7 +1807,7 @@ export const api = {
   },
 
   getClientWorkspaces: async (agencyId: string = 'ag-acrobat-global'): Promise<ClientWorkspace[]> => {
-    return fetchWithFallback(`/agency/clients?agency_id=${agencyId}`, {}, [
+    return requestAuthenticated(`/agency/clients?agency_id=${agencyId}`, {}, [
       {
         client_id: 'c-psychs',
         brand_name: 'Psychs',
@@ -1915,7 +1902,7 @@ export const api = {
   },
 
   createClientWorkspace: async (payload: { brand_name: string; client_domain: string; primary_industry: string; allocated_monthly_tokens?: number; subscription_tier?: string }): Promise<ClientWorkspace> => {
-    return fetchWithFallback('/agency/clients/create', {
+    return requestAuthenticated('/agency/clients/create', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1936,7 +1923,7 @@ export const api = {
   },
 
   updateWhiteLabelConfig: async (payload: Partial<WhiteLabelConfig>): Promise<WhiteLabelConfig> => {
-    return fetchWithFallback('/agency/clients/update-theme', {
+    return requestAuthenticated('/agency/clients/update-theme', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -1954,7 +1941,7 @@ export const api = {
   },
 
   verifyCustomDomain: async (custom_domain: string): Promise<CustomDomainStatus> => {
-    return fetchWithFallback('/agency/domains/verify', {
+    return requestAuthenticated('/agency/domains/verify', {
       method: 'POST',
       body: JSON.stringify({ custom_domain })
     }, {
@@ -1969,7 +1956,7 @@ export const api = {
   },
 
   getAgencyUsers: async (agencyId: string = 'ag-acrobat-global'): Promise<ClientUserAccess[]> => {
-    return fetchWithFallback(`/agency/users?agency_id=${agencyId}`, {}, [
+    return requestAuthenticated(`/agency/users?agency_id=${agencyId}`, {}, [
       {
         user_id: 'usr-ag-01',
         email: 'elena.vance@acrobatgeo.io',
@@ -2024,7 +2011,7 @@ export const api = {
   },
 
   inviteAgencyUser: async (payload: { email: string; full_name: string; role: string; assigned_client_ids: string[] }): Promise<ClientUserAccess> => {
-    return fetchWithFallback('/agency/users/invite', {
+    return requestAuthenticated('/agency/users/invite', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2040,7 +2027,7 @@ export const api = {
   },
 
   getReportDispatchSchedules: async (agencyId: string = 'ag-acrobat-global'): Promise<ReportDispatchSchedule[]> => {
-    return fetchWithFallback(`/agency/reports/schedules?agency_id=${agencyId}`, {}, [
+    return requestAuthenticated(`/agency/reports/schedules?agency_id=${agencyId}`, {}, [
       {
         schedule_id: 'sch-rep-01',
         client_id: 'c-psychs',
@@ -2087,7 +2074,7 @@ export const api = {
   },
 
   createReportSchedule: async (payload: { client_id: string; client_brand_name: string; cadence: string; recipient_emails: string[]; include_executive_summary?: boolean; include_sov_breakdown?: boolean; include_kdd_diffs?: boolean; include_bot_telemetry?: boolean }): Promise<ReportDispatchSchedule> => {
-    return fetchWithFallback('/agency/reports/schedule-dispatch', {
+    return requestAuthenticated('/agency/reports/schedule-dispatch', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2107,7 +2094,7 @@ export const api = {
   },
 
   triggerTestReportDispatch: async (scheduleId: string): Promise<any> => {
-    return fetchWithFallback('/agency/reports/trigger-test', {
+    return requestAuthenticated('/agency/reports/trigger-test', {
       method: 'POST',
       body: JSON.stringify({ schedule_id: scheduleId })
     }, {
@@ -2124,7 +2111,7 @@ export const api = {
 
   // Competitor Counter-Positioning & Search Siphoning Methods
   getCompetitorLandscape: async (brandName: string = 'Psychs'): Promise<CompetitorSiphoningReport> => {
-    return fetchWithFallback(`/intelligence/counter-positioning/landscape?brand_name=${brandName}`, {}, {
+    return requestAuthenticated(`/intelligence/counter-positioning/landscape?brand_name=${brandName}`, {}, {
       brand_name: brandName,
       total_competitors_tracked: 4,
       total_vulnerabilities_cataloged: 12,
@@ -2178,7 +2165,7 @@ export const api = {
   },
 
   synthesizeCounterStrategy: async (payload: { brand_name: string; competitor_name: string; comparative_angle: string }): Promise<SiphoningStrategyPayload> => {
-    return fetchWithFallback('/intelligence/counter-positioning/synthesize', {
+    return requestAuthenticated('/intelligence/counter-positioning/synthesize', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2226,7 +2213,7 @@ export const api = {
   },
 
   simulateSiphoningLift: async (payload: { brand_name: string; competitor_name: string; strategy_id: string }): Promise<SiphoningLiftSimulationResult> => {
-    return fetchWithFallback('/intelligence/counter-positioning/simulate-lift', {
+    return requestAuthenticated('/intelligence/counter-positioning/simulate-lift', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2252,7 +2239,7 @@ export const api = {
 
   // Multi-Model Consensus & Hallucination Dispute Tribunal
   getTribunalReport: async (brandName: string = 'Psychs'): Promise<DisputeTribunalReport> => {
-    return fetchWithFallback(`/intelligence/tribunal/cases?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/tribunal/cases?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       total_disputes_tracked: 3,
       active_critical_cases: 1,
@@ -2365,7 +2352,7 @@ export const api = {
   },
 
   reconcileDisputeCase: async (payload: { brand_name: string; dispute_id: string }): Promise<TruthReconciliationManifest> => {
-    return fetchWithFallback('/intelligence/tribunal/reconcile', {
+    return requestAuthenticated('/intelligence/tribunal/reconcile', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2396,7 +2383,7 @@ export const api = {
   },
 
   dispatchTribunalErrata: async (payload: { brand_name: string; dispute_id: string }): Promise<any> => {
-    return fetchWithFallback('/intelligence/tribunal/dispatch-errata', {
+    return requestAuthenticated('/intelligence/tribunal/dispatch-errata', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2418,7 +2405,7 @@ export const api = {
 
   // Programmatic Citation Grounding & Authority Seed Network
   getCitationSeedReport: async (brandName: string = 'Psychs'): Promise<CitationSeedNetworkReport> => {
-    return fetchWithFallback(`/intelligence/citation-seeds/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/citation-seeds/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       total_seed_domains_tracked: 5,
       active_unclaimed_gaps: 3,
@@ -2535,7 +2522,7 @@ export const api = {
   },
 
   generateSeedingPlaybook: async (payload: { brand_name: string; opportunity_id: string }): Promise<SeedingPlaybook> => {
-    return fetchWithFallback('/intelligence/citation-seeds/generate-playbook', {
+    return requestAuthenticated('/intelligence/citation-seeds/generate-playbook', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2559,7 +2546,7 @@ export const api = {
   },
 
   updateSeedingCampaign: async (payload: { brand_name: string; opportunity_id: string; campaign_status: string }): Promise<GroundingThreadOpportunity> => {
-    return fetchWithFallback('/intelligence/citation-seeds/update-campaign', {
+    return requestAuthenticated('/intelligence/citation-seeds/update-campaign', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2581,7 +2568,7 @@ export const api = {
 
   // Autonomous GEO A/B Variant Autopilot & Edge Sandbox Methods
   getAutopilotExperiments: async (brandName: string = 'Psychs'): Promise<AutopilotReport> => {
-    return fetchWithFallback(`/intelligence/ab-autopilot/experiments?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/ab-autopilot/experiments?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       active_experiments_count: 2,
       statistical_convergence_rate_pct: 50.0,
@@ -2726,7 +2713,7 @@ export const api = {
     split_ratio?: string;
     bot_routing_mode?: string;
   }): Promise<GeoExperiment> => {
-    return fetchWithFallback('/intelligence/ab-autopilot/create-experiment', {
+    return requestAuthenticated('/intelligence/ab-autopilot/create-experiment', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2786,7 +2773,7 @@ export const api = {
     experiment_id: string;
     probe_count?: number;
   }): Promise<GeoExperiment> => {
-    return fetchWithFallback('/intelligence/ab-autopilot/simulate-evaluation', {
+    return requestAuthenticated('/intelligence/ab-autopilot/simulate-evaluation', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2848,7 +2835,7 @@ export const api = {
     experiment_id: string;
     promotion_channel?: string;
   }): Promise<any> => {
-    return fetchWithFallback('/intelligence/ab-autopilot/promote-winner', {
+    return requestAuthenticated('/intelligence/ab-autopilot/promote-winner', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -2868,7 +2855,7 @@ export const api = {
 
   // Negative SEO & Knowledge Graph Poisoning Defense Sentinel Methods
   getPoisoningSentinelReport: async (brandName: string = 'Psychs'): Promise<KnowledgePoisoningReport> => {
-    return fetchWithFallback(`/intelligence/poisoning-sentinel/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/poisoning-sentinel/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       total_threats_monitored: 3,
       active_critical_poisonings: 1,
@@ -2956,7 +2943,7 @@ export const api = {
   },
 
   scanPoisoningThreats: async (brandName: string = 'Psychs'): Promise<any> => {
-    return fetchWithFallback('/intelligence/poisoning-sentinel/scan', {
+    return requestAuthenticated('/intelligence/poisoning-sentinel/scan', {
       method: 'POST',
       body: JSON.stringify({ brand_name: brandName })
     }, {
@@ -2976,7 +2963,7 @@ export const api = {
   },
 
   synthesizePoisoningCounterPatch: async (payload: { brand_name: string; threat_id: string }): Promise<DefensiveCounterPatch> => {
-    return fetchWithFallback('/intelligence/poisoning-sentinel/synthesize-patch', {
+    return requestAuthenticated('/intelligence/poisoning-sentinel/synthesize-patch', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3001,7 +2988,7 @@ export const api = {
   },
 
   dispatchPoisoningNeutralization: async (payload: { brand_name: string; patch_id: string }): Promise<any> => {
-    return fetchWithFallback('/intelligence/poisoning-sentinel/dispatch-neutralization', {
+    return requestAuthenticated('/intelligence/poisoning-sentinel/dispatch-neutralization', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3023,7 +3010,7 @@ export const api = {
   },
 
   getBuyerJourneyReport: async (brandName: string = 'Psychs'): Promise<BuyerJourneyReport> => {
-    return fetchWithFallback(`/intelligence/buyer-journey/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/buyer-journey/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       overall_csor_pct: 84.0,
       total_simulations_executed: 3,
@@ -3197,7 +3184,7 @@ export const api = {
   },
 
   runPersonaSimulation: async (payload: { brand_name: string; persona_id: string; target_engine?: string }): Promise<JourneySimulation> => {
-    return fetchWithFallback('/intelligence/buyer-journey/simulate-persona', {
+    return requestAuthenticated('/intelligence/buyer-journey/simulate-persona', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3268,7 +3255,7 @@ export const api = {
   },
 
   synthesizeObjectionPreemption: async (payload: { brand_name: string; objection_tag: string; target_destination?: string }): Promise<ObjectionPreemptionPatch> => {
-    return fetchWithFallback('/intelligence/buyer-journey/synthesize-preemption', {
+    return requestAuthenticated('/intelligence/buyer-journey/synthesize-preemption', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3298,7 +3285,7 @@ export const api = {
   },
 
   getHeadlessCrawlReport: async (brandName: string = 'Psychs'): Promise<AutonomousIngestionReport> => {
-    return fetchWithFallback(`/ingestion/headless/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/ingestion/headless/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
       ingest_id: 'ING-PSYCHS-RECURSIVE-001',
       brand_name: brandName,
       root_domain: brandName.toLowerCase() === 'psychs' ? 'psychs.ai' : `${brandName.toLowerCase()}.com`,
@@ -3400,7 +3387,7 @@ export const api = {
     strip_injections?: boolean;
     raw_html_override?: string;
   }): Promise<AutonomousIngestionReport> => {
-    return fetchWithFallback('/ingestion/headless/crawl', {
+    return requestAuthenticated('/ingestion/headless/crawl', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3455,7 +3442,7 @@ export const api = {
   },
 
   getSitemapRoutes: async (brandName: string = 'Psychs'): Promise<{ brand_name: string; sitemap_routes: SitemapRoute[] }> => {
-    return fetchWithFallback(`/ingestion/headless/sitemap?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/ingestion/headless/sitemap?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       sitemap_routes: [
         { route_path: '/', priority: 1.0, changefreq: 'daily', lastmod: new Date().toISOString(), crawl_status: 'CRAWLED_SUCCESS' },
@@ -3469,7 +3456,7 @@ export const api = {
   // Real-Time Frontier AI Query Seismograph & Push Notification Center API
   // ---------------------------------------------------------------------------
   getSeismographTelemetry: async (brandName: string = 'Psychs'): Promise<SeismographLiveTelemetry> => {
-    return fetchWithFallback(`/intelligence/seismograph/telemetry?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/intelligence/seismograph/telemetry?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       current_composite_volatility: 74.8,
       global_alert_level: 'ELEVATED',
@@ -3607,7 +3594,7 @@ export const api = {
     message: string;
     metric_payload?: any;
   }): Promise<PushNotificationEvent> => {
-    return fetchWithFallback('/intelligence/seismograph/dispatch-alert', {
+    return requestAuthenticated('/intelligence/seismograph/dispatch-alert', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3629,7 +3616,7 @@ export const api = {
     brand_name: string;
     channel_id: string;
   }): Promise<any> => {
-    return fetchWithFallback('/intelligence/seismograph/test-channel', {
+    return requestAuthenticated('/intelligence/seismograph/test-channel', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3658,7 +3645,7 @@ export const api = {
     is_active: boolean;
     subscribed_events: string[];
   }): Promise<NotificationChannelConfig> => {
-    return fetchWithFallback('/intelligence/seismograph/update-channel', {
+    return requestAuthenticated('/intelligence/seismograph/update-channel', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3678,7 +3665,7 @@ export const api = {
   // Automated SOC2 Type II Continuous Compliance & Merkle Proof API
   // ---------------------------------------------------------------------------
   getSOC2ComplianceReport: async (brandName: string = 'Psychs'): Promise<SOC2ComplianceReport> => {
-    return fetchWithFallback(`/compliance/soc2/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/compliance/soc2/report?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       overall_compliance_pct: 100.0,
       overall_status: 'SOC2_TYPE_II_CERTIFIED',
@@ -3754,7 +3741,7 @@ export const api = {
     blocks: MerkleAuditBlock[];
     is_chain_intact: boolean;
   }> => {
-    return fetchWithFallback(`/compliance/soc2/merkle-chain?brand_name=${encodeURIComponent(brandName)}`, {}, {
+    return requestAuthenticated(`/compliance/soc2/merkle-chain?brand_name=${encodeURIComponent(brandName)}`, {}, {
       brand_name: brandName,
       merkle_root: '1dd76cd539074af7c1087bb72a9df50e39c4a8b7c6d5e4f3a2b1c0e9f8a7b6c5',
       total_blocks: 6,
@@ -3785,7 +3772,7 @@ export const api = {
   },
 
   verifyMerkleProof: async (payload: { brand_name: string; log_id: string }): Promise<MerkleAuditProof> => {
-    return fetchWithFallback('/compliance/soc2/verify-proof', {
+    return requestAuthenticated('/compliance/soc2/verify-proof', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3808,7 +3795,7 @@ export const api = {
     period_days?: number;
     format?: string;
   }): Promise<SOC2CompliancePackage> => {
-    return fetchWithFallback('/compliance/soc2/export-package', {
+    return requestAuthenticated('/compliance/soc2/export-package', {
       method: 'POST',
       body: JSON.stringify(payload)
     }, {
@@ -3831,7 +3818,7 @@ export const api = {
   },
 
   getCacheStats: async () => {
-    return fetchWithFallback('/routing/cache/stats', {}, {
+    return requestAuthenticated('/routing/cache/stats', {}, {
       exact_entries_count: 1420,
       semantic_entries_count: 850,
       max_exact_capacity: 10000,
@@ -3847,7 +3834,7 @@ export const api = {
   },
 
   getResilienceStatus: async () => {
-    return fetchWithFallback('/network/resilience-status', {}, {
+    return requestAuthenticated('/network/resilience-status', {}, {
       status: 'HEALTHY',
       total_circuit_breakers: 8,
       healthy_closed_count: 8,
@@ -3873,14 +3860,13 @@ export const api = {
   },
 
   failoverProxy: async () => {
-    return fetchWithFallback('/network/failover-proxy', { method: 'POST' }, {
+    return requestAuthenticated('/network/failover-proxy', { method: 'POST' }, {
       status: 'FAILOVER_TRIGGERED',
       active_egress_region: 'US-West (PDX - Residential)',
       timestamp: new Date().toISOString()
     });
   }
 };
-
 
 
 
