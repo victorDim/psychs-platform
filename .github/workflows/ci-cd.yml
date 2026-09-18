@@ -217,19 +217,24 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_BACKEND }}@${{ steps.build-backend.outputs.digest }}
-          format: table
+          format: json
+          output: trivy-backend.json
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: 1
+          exit-code: 0
 
       - name: Scan Frontend Image for Fixable High/Critical Vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_FRONTEND }}@${{ steps.build-frontend.outputs.digest }}
-          format: table
+          format: json
+          output: trivy-frontend.json
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: 1
+          exit-code: 0
+
+      - name: Enforce Container Vulnerability Policy
+        run: python .github/scripts/enforce_trivy.py trivy-backend.json trivy-frontend.json
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
