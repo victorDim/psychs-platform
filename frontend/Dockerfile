@@ -5,7 +5,7 @@
 # ==============================================================================
 
 # Stage 1: Builder
-FROM node:24-alpine AS builder
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS builder
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production Nginx Server
-FROM nginxinc/nginx-unprivileged:1.30-alpine AS runner
+FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:daa17b944bac2b578e962da4c61ad72a59233b3c63abea17113acaf4e6b9aea4 AS runner
 
 # Image assembly needs temporary root access to replace vendor-owned files.
 # Runtime drops back to the unprivileged nginx account below.
