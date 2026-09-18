@@ -58,7 +58,7 @@ jobs:
         run: |
           python -m compileall -q backend
           python backend/run_tests.py
-          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_recovery_drill.py
+          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_recovery_drill.py backend/tests/test_ci_security_enforcers.py
 
       - name: Validate FastAPI Application and Offline Migration
         working-directory: backend
@@ -176,9 +176,16 @@ jobs:
           queries: security-extended
 
       - name: Analyze Python and TypeScript
+        id: codeql-analysis
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           category: "/language:python-and-javascript-typescript"
+          output: codeql-results
+
+      - name: Enforce CodeQL Release Policy
+        env:
+          CODEQL_SECURITY_SEVERITY_THRESHOLD: "7.0"
+        run: python .github/scripts/enforce_codeql.py "${{ steps.codeql-analysis.outputs.sarif-output }}"
 
   # ============================================================================
   # Stage 4: Container Build & Push to GHCR (Fast Linux AMD64)
