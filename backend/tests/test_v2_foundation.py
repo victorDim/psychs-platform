@@ -37,13 +37,22 @@ def test_v2_policy_requires_role_and_scope():
 
 
 def test_v2_migration_forces_rls_with_write_checks():
-    migration = (
-        Path(__file__).resolve().parents[1]
-        / "migrations"
-        / "versions"
-        / "0001_v2_control_plane.py"
-    ).read_text(encoding="utf-8")
-    assert "FORCE ROW LEVEL SECURITY" in migration
-    assert "WITH CHECK" in migration
-    assert "current_setting('app.current_tenant_id', true)" in migration
-    assert "audit_events_append_only" in migration
+    versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+    migrations = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in versions.glob("*.py")
+    }
+    for migration_name in ("0001_v2_control_plane.py", "0002_authoritative_sources.py"):
+        migration = migrations[migration_name]
+        assert "FORCE ROW LEVEL SECURITY" in migration
+        assert "WITH CHECK" in migration
+        assert "current_setting('app.current_tenant_id', true)" in migration
+
+    foundation = migrations["0001_v2_control_plane.py"]
+    sources = migrations["0002_authoritative_sources.py"]
+    assert "audit_events_append_only" in foundation
+    assert "fk_source_tenant_project" in sources
+    assert "fk_domain_challenge_tenant_project" in sources
+    assert "token_hash CHAR(64)" in sources
+    assert "raw_token" not in sources
+    assert "uq_domain_challenge_pending" in sources

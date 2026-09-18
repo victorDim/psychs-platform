@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
-from app.v2.routes import ProjectCreate
+from app.v2.routes import AuthoritativeSourceCreate, ProjectCreate
 from app.v2.settings import V2Settings
 
 
@@ -80,6 +80,42 @@ def test_project_command_forbids_tenant_selection_and_non_domain_urls():
 
     command = ProjectCreate(name="Valid", slug="valid-project", canonical_domain="https://Example.com/")
     assert command.canonical_domain == "example.com"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/admin",
+        "http://169.254.169.254/latest/meta-data",
+        "https://user:password@example.com/",
+        "https://example.com/page#private-fragment",
+        "https://example.com:8443/",
+    ],
+)
+def test_authoritative_source_rejects_unsafe_or_noncanonical_urls(url):
+    with pytest.raises(ValidationError):
+        AuthoritativeSourceCreate(
+            canonical_url=url,
+            source_type="website",
+            owner_label="Security test",
+        )
+
+
+def test_authoritative_source_forbids_tenant_selection_and_normalizes_url():
+    with pytest.raises(ValidationError):
+        AuthoritativeSourceCreate(
+            canonical_url="https://example.com/",
+            source_type="website",
+            owner_label="Cross tenant attempt",
+            tenant_id="00000000-0000-0000-0000-000000000001",
+        )
+
+    command = AuthoritativeSourceCreate(
+        canonical_url="HTTPS://Example.COM/docs?version=2",
+        source_type="documentation",
+        owner_label="Product documentation",
+    )
+    assert command.canonical_url == "https://example.com/docs?version=2"
 
 
 def test_oidc_verifies_signature_claims_tenant_and_scopes():

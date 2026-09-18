@@ -88,6 +88,76 @@ def test_rls_denies_missing_context_and_cross_tenant_access():
             assert cursor.fetchone() is None
 
 
+def test_source_registry_enforces_rls_and_tenant_project_integrity():
+    tenant_a, tenant_b, user_a, user_b = _seed_two_tenants()
+    project_a, project_b, source_a, challenge_a = uuid4(), uuid4(), uuid4(), uuid4()
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (project_a, tenant_a, f"project-a-{project_a.hex[:8]}", "Project A", "a.example.com", user_a),
+                    (project_b, tenant_b, f"project-b-{project_b.hex[:8]}", "Project B", "b.example.com", user_b),
+                ],
+            )
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute(
+                """
+                INSERT INTO authoritative_sources
+                    (id, tenant_id, project_id, canonical_url, source_type, owner_label, created_by)
+                VALUES (%s, %s, %s, 'https://a.example.com/', 'website', 'Tenant A', %s)
+                """,
+                (source_a, tenant_a, project_a, user_a),
+            )
+            cursor.execute(
+                """
+                INSERT INTO domain_verification_challenges
+                    (id, tenant_id, project_id, token_hash, expires_at, created_by)
+                VALUES (%s, %s, %s, repeat('a', 64), now() + interval '15 minutes', %s)
+                """,
+                (challenge_a, tenant_a, project_a, user_a),
+            )
+
+            with pytest.raises(psycopg.errors.ForeignKeyViolation):
+                with connection.transaction():
+                    _set_tenant(cursor, tenant_a)
+                    cursor.execute(
+                        """
+                        INSERT INTO authoritative_sources
+                            (tenant_id, project_id, canonical_url, source_type, owner_label, created_by)
+                        VALUES (%s, %s, 'https://forged.example.com/', 'website', 'Forged', %s)
+                        """,
+                        (tenant_a, project_b, user_a),
+                    )
+
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    _set_tenant(cursor, tenant_a)
+                    cursor.execute(
+                        """
+                        INSERT INTO authoritative_sources
+                            (tenant_id, project_id, canonical_url, source_type, owner_label, created_by)
+                        VALUES (%s, %s, 'https://tenant-b.example.com/', 'website', 'Tenant B', %s)
+                        """,
+                        (tenant_b, project_b, user_b),
+                    )
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_b)
+            cursor.execute("SELECT id FROM authoritative_sources WHERE id = %s", (source_a,))
+            assert cursor.fetchone() is None
+            cursor.execute("SELECT id FROM domain_verification_challenges WHERE id = %s", (challenge_a,))
+            assert cursor.fetchone() is None
+
+
 def test_audit_events_are_append_only_for_application_role():
     tenant_a, _, user_a, _ = _seed_two_tenants()
     event_id = uuid4()

@@ -61,6 +61,12 @@ def provision_application_role(owner_url: str, role: str, password: str) -> None
             cursor.execute(
                 sql.SQL("GRANT SELECT, INSERT ON idempotency_records, audit_events TO {}").format(sql.Identifier(role))
             )
+            cursor.execute(
+                sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON authoritative_sources TO {}").format(sql.Identifier(role))
+            )
+            cursor.execute(
+                sql.SQL("GRANT SELECT, INSERT, UPDATE ON domain_verification_challenges TO {}").format(sql.Identifier(role))
+            )
 
 
 def main() -> None:
