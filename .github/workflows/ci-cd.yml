@@ -95,9 +95,11 @@ jobs:
 
       - name: Type Check and Build Frontend
         working-directory: frontend
-        run: |
-          npm run build
-          npm audit --omit=dev --audit-level=high
+        run: npm run build
+
+      - name: Audit Frontend Production Dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
 
   # ============================================================================
   # Stage 2: Deployment & Kubernetes Manifests Verification
