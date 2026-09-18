@@ -12,7 +12,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.lock
 FROM python:3.12-slim-bookworm AS runtime
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

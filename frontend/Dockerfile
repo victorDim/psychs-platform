@@ -5,7 +5,7 @@
 # ==============================================================================
 
 # Stage 1: Builder
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -29,11 +29,15 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production Nginx Server
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM nginxinc/nginx-unprivileged:1.30-alpine AS runner
 
 # Image assembly needs temporary root access to replace vendor-owned files.
 # Runtime drops back to the unprivileged nginx account below.
 USER root
+
+# Refresh distribution packages so rebuilt images receive fixes published
+# between upstream image releases. The vulnerability gate verifies the result.
+RUN apk upgrade --no-cache
 
 # Remove default nginx configs
 RUN rm -rf /etc/nginx/conf.d/* /usr/share/nginx/html/*

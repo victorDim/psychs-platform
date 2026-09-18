@@ -82,10 +82,10 @@ jobs:
           python -m pytest -q tests/integration/test_postgres_rls.py
 
       # --- Frontend TypeScript Verification ---
-      - name: Setup Node.js 20
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -176,6 +176,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
+          pull: true
           platforms: linux/amd64
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
@@ -199,6 +200,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
+          pull: true
           platforms: linux/amd64
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
