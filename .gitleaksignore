@@ -1,0 +1,12 @@
+# Reviewed historical demo/test placeholders. Fingerprint scope is deliberate:
+# new occurrences, changed lines, and changed commits remain blocking findings.
+0c401c8772c7912da7b4985e6fe695ebf732fb2c:backend/app/v2/domain_verification.py:generic-api-key:12
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/app/agency/white_label_portal.py:generic-api-key:160
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/app/auth/session_vault.py:generic-api-key:32
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/app/scheduler/webhook_dispatcher.py:slack-webhook-url:38
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/tests/test_live_gateway.py:generic-api-key:11
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/tests/test_live_gateway.py:generic-api-key:12
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:backend/server.py:generic-api-key:529
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:frontend/src/components/Scheduler/BackgroundJobsMonitor.tsx:generic-api-key:70
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:frontend/src/mockData/defaultData.ts:slack-webhook-url:823
+c77a8f723a813b56bb6f1d3586bf5f173e8d7d64:frontend/src/services/api.ts:generic-api-key:1802

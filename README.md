@@ -30,6 +30,7 @@ The new `/api/v2` foundation adds:
 - a production control-plane UI that renders only authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;
 - OCI SBOM/provenance attestations, fixable high/critical image scanning, and keyless Cosign signatures;
+- CodeQL extended security analysis and full-history secret scanning before candidate images are built;
 - dependency-aware startup/readiness and structured request logs.
 
 ## Local verification
@@ -94,7 +95,7 @@ Before production promotion, all of the following are mandatory:
 2. Exercise the selected OIDC provider in staging, including service identities, revocation, and step-up authentication.
 3. Add idempotent background jobs, retry policy, and dead-letter handling; continue scheduled restore drills using [the PostgreSQL recovery runbook](docs/runbooks/postgres-recovery.md).
 4. Add actionable metrics, SLOs, dashboards, and alert runbooks on top of the existing structured logs, request IDs, and OpenTelemetry traces.
-5. Add dedicated SAST and secret-scanning gates on top of the existing dependency locks, SBOMs, signed images, provenance attestations, and container scanning.
+5. Keep CodeQL, full-history secret scanning, dependency locks, SBOMs, signed images, provenance attestations, and container scanning green; triage security alerts before promotion.
 6. Exercise staging smoke tests, rollback, disaster recovery, load tests, and a third-party penetration test.
 7. Confirm that every customer-visible metric distinguishes observed, inferred, and synthetic evidence.
 

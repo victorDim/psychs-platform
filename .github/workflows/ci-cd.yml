@@ -145,11 +145,47 @@ jobs:
           "
 
   # ============================================================================
-  # Stage 3: Container Build & Push to GHCR (Fast Linux AMD64)
+  # Stage 3: Source Security Analysis & Repository-History Secret Scanning
+  # ============================================================================
+  security-analysis:
+    name: "CodeQL & Secret Scanning"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Complete Repository History
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan Git History for Secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_VERSION: "8.30.1"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: python,javascript-typescript
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze Python and TypeScript
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          category: "/language:python-and-javascript-typescript"
+
+  # ============================================================================
+  # Stage 4: Container Build & Push to GHCR (Fast Linux AMD64)
   # ============================================================================
   build-and-push-containers:
     name: "Build & Push Containers to GHCR"
-    needs: [lint-and-test, validate-k8s]
+    needs: [lint-and-test, validate-k8s, security-analysis]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     outputs:
@@ -278,7 +314,7 @@ jobs:
           push-to-registry: true
 
   # ============================================================================
-  # Stage 4: Release candidate evidence. Production promotion requires a
+  # Stage 5: Release candidate evidence. Production promotion requires a
   # separately reviewed GitOps change with immutable image digests.
   # ============================================================================
   release-candidate:
