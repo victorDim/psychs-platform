@@ -14,11 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ingestion.ssrf_guard import validate_public_url_syntax
+
 from .context import RequestContext
 from .database import get_session
 from .dependencies import require_permission
-from app.ingestion.ssrf_guard import validate_public_url_syntax
-
+from .domain_verification import DnsVerificationUnavailable, dns_txt_matches
 from .models import (
     AuditEvent,
     AuthoritativeSource,
@@ -114,11 +115,22 @@ class AuthoritativeSourceResponse(BaseModel):
 
 
 class DomainVerificationChallengeResponse(BaseModel):
-    challenge_id: UUID
+    challenge_id: UUID = Field(validation_alias="id")
     domain: str
     verification_method: Literal["dns_txt"] = "dns_txt"
     dns_record_name: str
     dns_record_value: str
+    expires_at: datetime
+
+
+class DomainVerificationResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    challenge_id: UUID
+    status: Literal["pending", "verified", "expired", "superseded", "failed"]
+    attempt_count: int
+    last_checked_at: Optional[datetime]
+    verified_at: Optional[datetime]
     expires_at: datetime
 
 
@@ -365,3 +377,94 @@ async def create_domain_verification_challenge(
         dns_record_value=f"psychs-verification={raw_token}",
         expires_at=expires_at,
     )
+
+
+@router.post(
+    "/projects/{project_id}/domain-verification-challenges/{challenge_id}/verify",
+    response_model=DomainVerificationResultResponse,
+)
+async def verify_domain_verification_challenge(
+    project_id: UUID,
+    challenge_id: UUID,
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    project = await _tenant_project(session, context, project_id)
+    lock_acquired = (
+        await session.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"{context.tenant_id}:{project_id}:domain-verification"},
+        )
+    ).scalar_one()
+    if not lock_acquired:
+        raise HTTPException(status_code=409, detail="Domain verification is already in progress")
+    challenge = (
+        await session.execute(
+            select(DomainVerificationChallenge).where(
+                DomainVerificationChallenge.id == challenge_id,
+                DomainVerificationChallenge.tenant_id == context.tenant_id,
+                DomainVerificationChallenge.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if challenge is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Verification challenge not found")
+    if challenge.status != "pending":
+        return challenge
+
+    checked_at = datetime.now(timezone.utc)
+    if challenge.last_checked_at and challenge.last_checked_at > checked_at - timedelta(seconds=10):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Domain verification may be attempted once every 10 seconds",
+            headers={"Retry-After": "10"},
+        )
+    matched = False
+    if challenge.expires_at > checked_at:
+        try:
+            matched = await dns_txt_matches(
+                f"_psychs-verification.{project.canonical_domain}",
+                challenge.token_hash,
+            )
+        except DnsVerificationUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    # Lock the row before persisting the result. The advisory lock also
+    # serializes this check with challenge rotation for the project.
+    locked_challenge = (
+        await session.execute(
+            select(DomainVerificationChallenge)
+            .where(
+                DomainVerificationChallenge.id == challenge_id,
+                DomainVerificationChallenge.tenant_id == context.tenant_id,
+                DomainVerificationChallenge.project_id == project_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if locked_challenge is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Verification challenge not found")
+    if locked_challenge.status != "pending":
+        return locked_challenge
+
+    locked_challenge.last_checked_at = checked_at
+    locked_challenge.attempt_count += 1
+    action = "domain_verification.checked"
+    if locked_challenge.expires_at <= checked_at:
+        locked_challenge.status = "expired"
+        action = "domain_verification.expired"
+    elif matched:
+        locked_challenge.status = "verified"
+        locked_challenge.verified_at = checked_at
+        action = "domain_verification.verified"
+
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action=action,
+        resource_type="domain_verification_challenge",
+        resource_id=locked_challenge.id,
+        payload={"project_id": str(project_id), "status": locked_challenge.status},
+    ))
+    return locked_challenge

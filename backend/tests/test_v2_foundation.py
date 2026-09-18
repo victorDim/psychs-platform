@@ -56,3 +56,7 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "token_hash CHAR(64)" in sources
     assert "raw_token" not in sources
     assert "uq_domain_challenge_pending" in sources
+
+    attempts = migrations["0003_domain_verification_attempts.py"]
+    assert 'down_revision = "0002_authoritative_sources"' in attempts
+    assert "attempt_count >= 0" in attempts

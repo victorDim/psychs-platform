@@ -1,5 +1,7 @@
 """Dependency-backed validation for v2 startup and security contracts."""
 
+import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -9,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
+from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_matches
 from app.v2.routes import AuthoritativeSourceCreate, ProjectCreate
 from app.v2.settings import V2Settings
 
@@ -116,6 +119,64 @@ def test_authoritative_source_forbids_tenant_selection_and_normalizes_url():
         owner_label="Product documentation",
     )
     assert command.canonical_url == "https://example.com/docs?version=2"
+
+
+class _TxtRecord:
+    def __init__(self, *chunks: bytes):
+        self.strings = chunks
+
+
+class _TxtResolver:
+    def __init__(self, result=None, error=None):
+        self.result = result or []
+        self.error = error
+        self.calls = []
+
+    async def resolve(self, name, rdtype, **kwargs):
+        self.calls.append((name, rdtype, kwargs))
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_dns_verification_matches_chunked_txt_token_with_bounded_query():
+    token = "one-time-domain-token"
+    resolver = _TxtResolver([_TxtRecord(b"psychs-verification=one-time-", b"domain-token")])
+    matched = asyncio.run(
+        dns_txt_matches(
+            "_psychs-verification.example.com",
+            hashlib.sha256(token.encode()).hexdigest(),
+            resolver=resolver,
+        )
+    )
+    assert matched is True
+    _, record_type, options = resolver.calls[0]
+    assert record_type == "TXT"
+    assert options["lifetime"] == 3.0
+    assert options["search"] is False
+
+
+def test_dns_verification_rejects_wrong_token_and_surfaces_resolver_failure():
+    resolver = _TxtResolver([_TxtRecord(b"psychs-verification=wrong")])
+    matched = asyncio.run(
+        dns_txt_matches(
+            "_psychs-verification.example.com",
+            hashlib.sha256(b"expected").hexdigest(),
+            resolver=resolver,
+        )
+    )
+    assert matched is False
+
+    import dns.exception
+
+    with pytest.raises(DnsVerificationUnavailable):
+        asyncio.run(
+            dns_txt_matches(
+                "_psychs-verification.example.com",
+                hashlib.sha256(b"expected").hexdigest(),
+                resolver=_TxtResolver(error=dns.exception.Timeout()),
+            )
+        )
 
 
 def test_oidc_verifies_signature_claims_tenant_and_scopes():

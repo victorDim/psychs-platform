@@ -4,7 +4,7 @@ Psychs is an AI brand-perception and Generative Engine Optimization platform. Th
 
 ## Current status
 
-This codebase is **not yet approved for production traffic**. Phase 0 hardening and the first Phase 1 control-plane slice are in place. Real identity-provider integration, live PostgreSQL RLS tests, frontend authentication, remaining domain migrations, and end-to-end staging validation remain release blockers.
+This codebase is **not yet approved for production traffic**. Phase 0 hardening and the first Phase 1 control-plane slices are in place. Real identity-provider integration, frontend authentication, remaining domain migrations, and end-to-end staging validation remain release blockers. PostgreSQL migrations and cross-tenant RLS are now exercised against PostgreSQL 16 in CI.
 
 The software now fails closed by default:
 
@@ -24,6 +24,8 @@ The new `/api/v2` foundation adds:
 - SQLAlchemy repositories with transaction-local tenant identity;
 - Alembic migrations with forced PostgreSQL RLS and append-only audit events;
 - tenant-scoped project creation with idempotency and audit records;
+- tenant-scoped authoritative-source registration with canonical URL and SSRF validation;
+- one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
 - dependency-aware startup/readiness and structured request logs.
 
 ## Local verification
@@ -35,7 +37,7 @@ python3 -m compileall -q backend
 python3 backend/run_tests.py
 ```
 
-The suite currently contains 117 tests. Some legacy tests write JSON fixtures, so run them in a disposable checkout when preserving the working tree matters.
+The compatibility suite currently contains 117 tests, supplemented by dependency-backed v2 security tests and live PostgreSQL isolation tests in CI. Some legacy tests write JSON fixtures, so run them in a disposable checkout when preserving the working tree matters.
 
 Frontend verification requires Node.js 20:
 
