@@ -11,6 +11,7 @@ entropy audits, and econometric ROI forecasts with SHA-256 compliance seals.
 import hashlib
 import json
 import time
+import html
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from ..compat import BaseModel, Field
@@ -31,7 +32,8 @@ class BoardReportMetadata(BaseModel):
     auditor_identity: str
     is_confidential: bool = True
     cryptographic_sha256_seal: str
-    soc2_compliance_verified: bool = True
+    evidence_mode: str = "SYNTHETIC_DEMO"
+    soc2_compliance_verified: bool = False
 
 class ExecutiveSummarySection(BaseModel):
     aggregate_score: float
@@ -228,7 +230,8 @@ class BoardReportGenerator:
             auditor_identity="Psychs Autonomous GEO Engine v2.0-PROD (Cryptographically Signed)",
             is_confidential=is_confidential,
             cryptographic_sha256_seal=sha256_seal,
-            soc2_compliance_verified=True
+            evidence_mode="SYNTHETIC_DEMO",
+            soc2_compliance_verified=False
         )
 
         # Generate standalone printable HTML
@@ -314,7 +317,7 @@ class BoardReportGenerator:
             weight = "bold" if is_client else "normal"
             leader_rows += f"""
             <tr style="background-color: {bg};">
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: {weight};">{m.get('brand_name')} {'(Client)' if is_client else ''}</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: {weight};">{html.escape(str(m.get('brand_name', '')))} {'(Client)' if is_client else ''}</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center; font-weight: bold; color: #047857;">{m.get('generative_sov_percent')}%</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">{m.get('primary_recommendation_rate')}%</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">{m.get('average_citations_per_query')}</td>
@@ -340,7 +343,7 @@ class BoardReportGenerator:
             notes_section = f"""
             <div style="margin-top: 24px; padding: 16px; background-color: #f8fafc; border-left: 4px solid #0f766e; border-radius: 4px;">
                 <h4 style="margin: 0 0 6px 0; color: #0f172a; font-size: 13px; text-transform: uppercase;">Executive Board Commentary</h4>
-                <p style="margin: 0; font-size: 13px; color: #334155; line-height: 1.5;">{custom_notes}</p>
+                <p style="margin: 0; font-size: 13px; color: #334155; line-height: 1.5;">{html.escape(custom_notes)}</p>
             </div>
             """
 
@@ -352,7 +355,7 @@ class BoardReportGenerator:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Boardroom Perception Report - {metadata.brand_name}</title>
+<title>Boardroom Perception Report - {html.escape(metadata.brand_name)}</title>
 <style>
   @page {{ size: A4 portrait; margin: 16mm; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; line-height: 1.45; font-size: 13px; margin: 0; padding: 0; }}
@@ -372,8 +375,8 @@ class BoardReportGenerator:
       <div style="font-size: 13px; color: #0d9488; font-weight: 600;">Executive Perception & AI Mindshare Board Audit</div>
     </div>
     <div style="text-align: right; font-size: 11px; color: #64748b;">
-      <div><strong>Report ID:</strong> {metadata.report_id}</div>
-      <div><strong>Target Brand:</strong> {metadata.brand_name}</div>
+      <div><strong>Report ID:</strong> {html.escape(metadata.report_id)}</div>
+      <div><strong>Target Brand:</strong> {html.escape(metadata.brand_name)}</div>
       <div><strong>Generated:</strong> {metadata.generated_at[:10]}</div>
     </div>
   </div>
@@ -405,18 +408,18 @@ class BoardReportGenerator:
   <!-- Executive Summary Box -->
   <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
     <h3 style="margin-top: 0; margin-bottom: 8px; font-size: 14px; color: #0f172a;">Executive Board Briefing</h3>
-    <p style="margin: 0 0 12px 0; color: #334155; line-height: 1.5;">{exec_summary.executive_overview}</p>
+    <p style="margin: 0 0 12px 0; color: #334155; line-height: 1.5;">{html.escape(exec_summary.executive_overview)}</p>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
       <div>
         <strong style="color: #047857; font-size: 12px; text-transform: uppercase;">Key Strategic Strengths</strong>
         <ul style="margin: 6px 0 0 0; padding-left: 18px; color: #334155; font-size: 12px;">
-          {''.join([f'<li>{s}</li>' for s in exec_summary.top_strategic_strengths])}
+          {''.join([f'<li>{html.escape(s)}</li>' for s in exec_summary.top_strategic_strengths])}
         </ul>
       </div>
       <div>
         <strong style="color: #b91c1c; font-size: 12px; text-transform: uppercase;">Critical Deficits to Remediate</strong>
         <ul style="margin: 6px 0 0 0; padding-left: 18px; color: #334155; font-size: 12px;">
-          {''.join([f'<li>{v}</li>' for v in exec_summary.urgent_vulnerabilities])}
+          {''.join([f'<li>{html.escape(v)}</li>' for v in exec_summary.urgent_vulnerabilities])}
         </ul>
       </div>
     </div>
@@ -464,7 +467,7 @@ class BoardReportGenerator:
   <!-- Econometric ROI Section -->
   <div style="background-color: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
     <h3 style="margin-top: 0; margin-bottom: 6px; font-size: 14px; color: #065f46;">3. Econometric Causal Attribution & Financial ROI</h3>
-    <p style="margin: 0 0 10px 0; font-size: 12px; color: #047857;">{roi.get('executive_takeaway')}</p>
+    <p style="margin: 0 0 10px 0; font-size: 12px; color: #047857;">{html.escape(str(roi.get('executive_takeaway', '')))}</p>
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; font-size: 12px;">
       <div><strong>Incremental Pipeline:</strong> ${roi.get('incremental_annual_pipeline_usd'):,.2f}</div>
       <div><strong>Semantic Cache Cost Offset:</strong> ${roi.get('estimated_cost_offset_from_cache_usd'):,.2f}/yr</div>
@@ -480,7 +483,7 @@ class BoardReportGenerator:
       <strong>Cryptographic SHA-256 Seal:</strong> <code>{metadata.cryptographic_sha256_seal}</code>
     </div>
     <div>
-      SOC 2 Type II Certified &bull; WORM Vault Sealed &bull; Psychs GEO v2.0-PROD
+      SYNTHETIC DEMO EVIDENCE &bull; Not a compliance attestation &bull; Psychs GEO
     </div>
   </div>
 </body>

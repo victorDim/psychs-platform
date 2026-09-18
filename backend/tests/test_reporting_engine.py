@@ -26,7 +26,8 @@ def test_board_report_generation_and_seal():
         assert report.metadata.report_type == "QUARTERLY_BOARD_DECK"
         assert report.metadata.is_confidential is True
         assert len(report.metadata.cryptographic_sha256_seal) == 64
-        assert report.metadata.soc2_compliance_verified is True
+        assert report.metadata.soc2_compliance_verified is False
+        assert report.metadata.evidence_mode == "SYNTHETIC_DEMO"
 
         # Verify Executive Summary
         assert report.executive_summary.aggregate_score >= 80.0
@@ -60,3 +61,12 @@ def test_historical_report_archive():
     history = BoardReportGenerator.get_report_history("Psychs")
     assert len(history) >= 2
     assert all("report_id" in h and "sha256_seal" in h for h in history)
+
+def test_report_html_escapes_untrusted_content():
+    report = BoardReportGenerator.generate_report(
+        brand_name='<img src=x onerror=alert(1)>',
+        custom_notes='<script>alert("xss")</script>'
+    )
+    assert '<script>alert("xss")</script>' not in report.printable_html
+    assert '<img src=x onerror=alert(1)>' not in report.printable_html
+    assert '&lt;script&gt;' in report.printable_html

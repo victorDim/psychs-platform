@@ -3,7 +3,6 @@ Sandboxed Headless Crawler & Autonomous Brand Ingestion Pipeline
 Simulates containerized DOM extraction, AST sanitization, Schema.org microdata generation,
 /llms.txt synthesis, and baseline cold perception audit generation.
 """
-import urllib.request
 import re
 import time
 import hashlib
@@ -11,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from .sanitizer import ASTSanitizer, SanitizationResult
 from .dual_llm_extractor import UnprivilegedExtractor, BrandEntitySchema
-from .ssrf_guard import is_safe_public_url
+from .ssrf_guard import fetch_public_text, is_safe_public_url, validate_public_url_syntax
 from ..perception.cold_panel import ColdPromptPanel
 from ..perception.composite_score import PerceptionScoringEngine
 from ..intelligence.sov_analyzer import SovAnalyzer
@@ -33,14 +32,16 @@ class IngestionPipeline:
         Executes sandboxed extraction, sanitization, Schema.org generation,
         /llms.txt synthesis, and baseline cold perception audit with SSRF defense.
         """
-        clean_input = url_or_domain.strip().lower()
+        clean_input = url_or_domain.strip()
         if not clean_input.startswith("http://") and not clean_input.startswith("https://"):
             target_url = f"https://{clean_input}"
         else:
             target_url = clean_input
 
-        # SSRF Security Validation
-        is_safe, ssrf_msg = is_safe_public_url(target_url)
+        # Uploaded HTML causes no outbound request, so validate its declared URL
+        # without requiring DNS. Live crawls resolve and validate every hop.
+        validator = validate_public_url_syntax if raw_html_override is not None else is_safe_public_url
+        is_safe, ssrf_msg = validator(target_url)
         if not is_safe:
             return {
                 "status": "SSRF_BLOCKED",
@@ -52,7 +53,7 @@ class IngestionPipeline:
                 }
             }
 
-        domain = target_url.replace("https://", "").replace("http://", "").split("/")[0]
+        domain = target_url.replace("https://", "").replace("http://", "").split("/")[0].lower()
         brand_derived = domain.split(".")[0].capitalize()
         timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -61,19 +62,28 @@ class IngestionPipeline:
             raw_html = raw_html_override
         else:
             try:
-                req = urllib.request.Request(
-                    target_url, 
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Psychs-GEO-Bot/2.0 (AST-Ingestion)"
+                raw_html, target_url = fetch_public_text(target_url, timeout_seconds=5.0)
+            except Exception as exc:
+                return {
+                    "status": "CRAWL_FAILED",
+                    "error": str(exc),
+                    "target_url": target_url,
+                    "sanitization": {
+                        "is_safe_for_indexing": False,
+                        "security_flags": ["LIVE_CRAWL_UNAVAILABLE"]
                     }
-                )
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    raw_html = response.read().decode('utf-8', errors='ignore')
-            except Exception:
-                raw_html = cls._generate_mock_html(domain, brand_derived)
+                }
 
         if not raw_html:
-            raw_html = cls._generate_mock_html(domain, brand_derived)
+            return {
+                "status": "CRAWL_FAILED",
+                "error": "Crawler returned an empty response",
+                "target_url": target_url,
+                "sanitization": {
+                    "is_safe_for_indexing": False,
+                    "security_flags": ["EMPTY_CRAWL_RESPONSE"]
+                }
+            }
 
         # 1. AST Sanitization & Security Scan
         sanitization_res = ASTSanitizer.sanitize(raw_html)
@@ -210,4 +220,3 @@ class IngestionPipeline:
         </body>
         </html>
         """
-

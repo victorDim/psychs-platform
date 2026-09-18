@@ -9,6 +9,7 @@ import time
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -65,18 +66,44 @@ from app.openapi_spec import OPENAPI_SPEC, SWAGGER_UI_HTML, REDOC_HTML
 import asyncio
 
 MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB limit (Anti-DoS)
+PUBLIC_GET_PATHS = {
+    "/health", "/api/v1/health", "/livez", "/api/v1/livez",
+    "/readyz", "/api/v1/readyz", "/docs", "/swagger", "/api/docs",
+    "/redoc", "/api/redoc", "/openapi.json", "/api/v1/openapi.json"
+}
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 class PsychsAPIHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = {
+            item.strip()
+            for item in os.environ.get(
+                "PSYCHS_CORS_ALLOWED_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173"
+            ).split(",")
+            if item.strip()
+        }
+        if origin and origin in allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 
     def do_OPTIONS(self):
-        self.send_response(200)
+        origin = self.headers.get("Origin", "")
+        allowed = {
+            item.strip()
+            for item in os.environ.get("PSYCHS_CORS_ALLOWED_ORIGINS", "").split(",")
+            if item.strip()
+        }
+        if origin and origin not in allowed:
+            self.send_response(403)
+            self.end_headers()
+            return
+        self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
 
@@ -84,6 +111,10 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(json.dumps(data, indent=2).encode('utf-8'))
 
@@ -117,31 +148,76 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
     def _authenticate_request(self) -> Optional[Dict[str, Any]]:
         """
         Validates Authorization: Bearer <token>.
-        Supports session JWTs minted by SessionVault, designated dev master tokens,
-        and defaults to SUPER_ADMIN context in local demo mode when unprovided.
+        Supports session JWTs minted by SessionVault. Authentication fails closed.
+        An explicit development-only escape hatch exists for isolated local demos.
         """
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:].strip()
-            if token in ["dev_super_admin_token", "psychs_enterprise_master_token", "dev-master"]:
-                return {
-                    "user_id": "usr-admin-01",
-                    "user_email": "chief.architect@psychs.ai",
-                    "tenant_id": "tenant-psychs-master",
-                    "role": "SUPER_ADMIN"
-                }
             payload = SessionVault().verify_jwt(token)
             if payload:
                 return payload
             return None
 
-        # Allow local development/browser requests by default
-        return {
-            "user_id": "usr-admin-01",
-            "user_email": "chief.architect@psychs.ai",
-            "tenant_id": "tenant-psychs-master",
-            "role": "SUPER_ADMIN"
-        }
+        environment = os.environ.get("PSYCHS_ENVIRONMENT", "development").lower()
+        allow_insecure = os.environ.get("PSYCHS_ALLOW_INSECURE_DEMO_AUTH", "false").lower() == "true"
+        if environment == "development" and allow_insecure:
+            return {
+                "sub": "local-demo-user",
+                "email": "local-demo@invalid",
+                "tenant_id": "tenant-local-demo",
+                "role": "SUPER_ADMIN",
+                "auth_mode": "INSECURE_LOCAL_DEMO"
+            }
+        return None
+
+    def _permission_for_request(self, method: str, path: str) -> Optional[Permission]:
+        if method == "GET" and path in PUBLIC_GET_PATHS:
+            return None
+        if method == "GET":
+            if path.startswith("/api/v1/settings/"):
+                return Permission.ROTATE_API_KEYS
+            if path.startswith("/api/v1/auth/"):
+                return Permission.MANAGE_USERS
+            if path.startswith("/api/v1/billing/"):
+                return Permission.MANAGE_BILLING
+            if path.startswith("/api/v1/audit/") or path.startswith("/api/v1/compliance/"):
+                return Permission.VIEW_WORM_AUDIT
+            if path.startswith("/api/v1/security/"):
+                return Permission.VIEW_WORM_AUDIT
+            return Permission.VIEW_TELEMETRY
+
+        if path.startswith("/api/v1/settings/"):
+            return Permission.ROTATE_API_KEYS
+        if path == "/api/v1/auth/sso/config":
+            return Permission.MANAGE_SSO
+        if path.startswith("/api/v1/auth/"):
+            return Permission.MANAGE_USERS
+        if path.startswith("/api/v1/billing/"):
+            return Permission.MANAGE_BILLING
+        if path.startswith("/api/v1/security/crypto-shred"):
+            return Permission.EXECUTE_CRYPTO_SHRED
+        if path.startswith("/api/v1/scheduler/"):
+            return Permission.MANAGE_SCHEDULES
+        if path.startswith("/api/v1/webhooks/"):
+            return Permission.MANAGE_WEBHOOKS
+        if path.startswith("/api/v1/gitops/") or path == "/api/v1/optimization/publish":
+            return Permission.MERGE_GITOPS_PR
+        if path.startswith("/api/v1/optimization/"):
+            return Permission.TRIGGER_GEO_OPTIMIZER
+        if path.startswith("/api/v1/agency/"):
+            return Permission.MANAGE_TENANT
+        if path.startswith("/api/v1/reports/"):
+            return Permission.EXPORT_REPORTS
+        if path.startswith("/api/v1/compliance/"):
+            return Permission.VIEW_WORM_AUDIT
+        return Permission.TRIGGER_LIVE_AUDIT
+
+    def _authorize_request(self, method: str, path: str) -> Optional[Dict[str, Any]]:
+        permission = self._permission_for_request(method, path)
+        if permission is None:
+            return {"public": True}
+        return self._require_permission(permission)
 
     def _require_permission(self, permission: Permission) -> Optional[Dict[str, Any]]:
         """
@@ -170,25 +246,37 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
+        if not self._authorize_request("GET", path):
+            return
+
         if path in ["/docs", "/swagger", "/api/docs"]:
             self._send_html(200, SWAGGER_UI_HTML)
         elif path in ["/redoc", "/api/redoc"]:
             self._send_html(200, REDOC_HTML)
         elif path in ["/openapi.json", "/api/v1/openapi.json"]:
             self._send_json(200, OPENAPI_SPEC)
+        elif path in ["/livez", "/api/v1/livez"]:
+            self._send_json(200, {"status": "ALIVE", "service": "psychs-api"})
+        elif path in ["/readyz", "/api/v1/readyz"]:
+            environment = os.environ.get("PSYCHS_ENVIRONMENT", "development").lower()
+            legacy_allowed = os.environ.get("PSYCHS_ALLOW_LEGACY_SERVER", "false").lower() == "true"
+            ready = environment != "production" or legacy_allowed
+            self._send_json(200 if ready else 503, {
+                "status": "READY" if ready else "NOT_READY",
+                "environment": environment,
+                "reason": None if ready else "Legacy in-memory server is blocked from production readiness"
+            })
         elif path in ["/health", "/api/v1/health"]:
+            environment = os.environ.get("PSYCHS_ENVIRONMENT", "development").lower()
             self._send_json(200, {
-                "status": "HEALTHY",
+                "status": "DEMO" if environment != "production" else "RUNNING",
                 "service": "Psychs Enterprise GEO Platform",
                 "version": "2.0.0-PROD",
-                "environment": "production",
-                "sla_uptime_target": "99.95%",
-                "database_partitions": 16,
-                "two_tier_cache": "ACTIVE",
-                "semantic_entropy_guardrail": "H_sem <= 0.45",
-                "canary_drift_engine": "ACTIVE",
-                "adaptive_sampler": "SPRT_ACTIVE",
-                "live_proxy_gateway": "ACTIVE"
+                "environment": environment,
+                "execution_mode": ConfigManager.get_instance().get_settings().execution_mode,
+                "synthetic_data_possible": ConfigManager.get_instance().get_settings().execution_mode != "LIVE",
+                "production_ready": False,
+                "runtime": "legacy_in_memory_server"
             })
         elif path == "/api/v1/perception/score":
             entity = float(query.get("entity_raw", [88.0])[0])
@@ -383,6 +471,9 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        request_auth = self._authorize_request("POST", path)
+        if not request_auth:
+            return
         body = self._read_json_body()
         if body is None:
             return
@@ -473,8 +564,15 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
                 approver_email=body.get("approver_email", "vp_marketing@brand.com"),
                 content_payload=body.get("content_payload", "Payload")
             )
-            res = CmsWebhookManager.publish_diff(req)
-            self._send_json(200, res.model_dump())
+            try:
+                res = CmsWebhookManager.publish_diff(req)
+            except PermissionError as exc:
+                self._send_json(403, {"error": "Approval rejected", "message": str(exc)})
+                return
+            except RuntimeError as exc:
+                self._send_json(503, {"error": "Publishing unavailable", "message": str(exc)})
+                return
+            self._send_json(res.http_status_code, res.model_dump())
         elif path == "/api/v1/router/classify":
             task_type = body.get("task_type", "G-Eval Reasoning")
             res = DynamicModelRouter.classify_and_route(task_type)
@@ -483,21 +581,33 @@ class PsychsAPIHandler(BaseHTTPRequestHandler):
             prompt = body.get("prompt", "")
             res = TwoTierCacheManager.lookup(prompt)
             self._send_json(200, res.model_dump())
-        elif path == "/api/v1/security/crypto-shred":
-            tenant = body.get("tenant_id", "ten_enterprise_prod_01")
-            operator = body.get("operator_id", "sec_officer_01")
-            res = CryptoShreddingService.shred_tenant_keys(tenant, operator)
-            self._send_json(200, res.model_dump())
         elif path == "/api/v1/mcp/execute":
             tool_name = body.get("tool_name", "get_composite_perception_score")
             arguments = body.get("arguments", {})
-            actor = body.get("actor_permission_level", 1)
+            role_levels = {
+                "ANALYST_VIEWER": 1,
+                "SECOPS_ADMIN": 2,
+                "BRAND_MANAGER": 3,
+                "CAB_APPROVER": 4,
+                "SUPER_ADMIN": 4,
+            }
+            actor_level = role_levels.get(request_auth.get("role", "ANALYST_VIEWER"), 1)
+            if tool_name == "publish_cms_webhook" and not RBACManager.has_permission(
+                request_auth.get("role", "ANALYST_VIEWER"), Permission.MERGE_GITOPS_PR
+            ):
+                self._send_json(403, {
+                    "error": "Forbidden",
+                    "message": "Caller is not authorized to publish through MCP"
+                })
+                return
             req = MCPToolExecutionRequest(
                 tool_name=tool_name,
                 arguments=arguments,
-                actor_permission_level=actor
+                current_agent_level=actor_level,
+                human_approval_signature=body.get("human_approval_signature"),
+                tenant_id=request_auth.get("tenant_id", "")
             )
-            res = PsychsMCPServer.execute_tool(req)
+            res = asyncio.run(PsychsMCPServer.execute_tool(req))
             self._send_json(200, res.model_dump())
         elif path == "/api/v1/scheduler/jobs":
             name = body.get("name", "Manual Audit Scrape")

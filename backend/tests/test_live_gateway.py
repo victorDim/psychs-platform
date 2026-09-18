@@ -8,16 +8,19 @@ from app.perception.live_connectors import LiveEngineDispatcher, ResidentialProx
 def test_config_masking_and_updates():
     cm = ConfigManager.get_instance()
     cm.update_settings({
-        "openai_api_key": "sk-proj-1234567890abcdef1234",
+        "openai_api_key": "test-openai-key-1234567890abcdef",
         "perplexity_api_key": "pplx-9876543210abcdef9876",
+        "proxy_url": "https://proxy-user:proxy-password@proxy.example.com:443",
         "execution_mode": "HYBRID_SANDBOX"
     })
     
     masked = cm.get_masked_settings()
-    assert masked["openai_api_key"].startswith("sk-p...")
+    assert masked["openai_api_key"].startswith("test...")
     assert masked["perplexity_api_key"].startswith("pplx...")
     assert "..." in masked["openai_api_key"]
     assert masked["execution_mode"] == "HYBRID_SANDBOX"
+    assert "proxy-password" not in masked["proxy_url"]
+    assert masked["proxy_url"] == "https://***:***@proxy.example.com:443"
 
 def test_live_connectors_circuit_breaker():
     # Perplexity fallback test without live network failure
@@ -39,10 +42,10 @@ def test_live_connectors_circuit_breaker():
 
 def test_residential_proxy_health():
     health = ResidentialProxyManager.test_proxy_health()
-    assert health["status"] == "HEALTHY"
-    assert health["active_ips"] >= 4000
-    assert "US-East" in health["geo_coverage"]
-    assert health["average_latency_ms"] < 250.0
+    assert health["status"] == "NOT_CONFIGURED"
+    assert health["active_ips"] == 0
+    assert health["geo_coverage"] == []
+    assert health["average_latency_ms"] == 0.0
 
 def test_connection_ping_diagnostics():
     ping_pplx = LiveEngineDispatcher.test_connection("Perplexity")
@@ -50,5 +53,5 @@ def test_connection_ping_diagnostics():
     assert ping_pplx.latency_ms > 0
 
     ping_proxy = LiveEngineDispatcher.test_connection("BrightData")
-    assert ping_proxy.status == "CONNECTED_LIVE"
-    assert "residential" in ping_proxy.message.lower()
+    assert ping_proxy.status == "NOT_CONFIGURED"
+    assert "not configured" in ping_proxy.message.lower()

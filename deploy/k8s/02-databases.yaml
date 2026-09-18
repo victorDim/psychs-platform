@@ -47,18 +47,18 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: psychs-secrets
-                  key: POSTGRES_USER
+                  name: psychs-datastore-secrets
+                  key: postgres-admin-user
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: psychs-secrets
-                  key: POSTGRES_PASSWORD
+                  name: psychs-datastore-secrets
+                  key: postgres-admin-password
             - name: POSTGRES_DB
               valueFrom:
-                configMapKeyRef:
-                  name: psychs-config
-                  key: DATABASE_NAME
+                secretKeyRef:
+                  name: psychs-datastore-secrets
+                  key: postgres-database
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           resources:
@@ -145,8 +145,8 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: psychs-secrets
-                  key: REDIS_PASSWORD
+                  name: psychs-datastore-secrets
+                  key: redis-password
           ports:
             - containerPort: 6379
               name: redis

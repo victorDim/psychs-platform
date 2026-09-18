@@ -10,13 +10,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-psychs}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-psychs_secure_pass_2026}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-psychs_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/app/database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-psychs} -d ${POSTGRES_DB:-psychs_db}"]
       interval: 10s
@@ -37,13 +34,11 @@ services:
     image: redis:7-alpine
     container_name: psychs-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-psychs_redis_secret_2026}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis_data:/data
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-psychs_redis_secret_2026}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,7 +51,26 @@ services:
           memory: 2G
 
   # ----------------------------------------------------------------------------
-  # 3. Psychs Backend Engine & SSE Server (Native Async, 20/20 Test Suite)
+  # 3. Forward-only schema migration using a database-owner credential.
+  # ----------------------------------------------------------------------------
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - MIGRATION_DATABASE_URL=postgresql://${POSTGRES_USER:-psychs}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-psychs_db}
+      - DATABASE_APP_USER=${DATABASE_APP_USER:-psychs_app}
+      - DATABASE_APP_PASSWORD=${DATABASE_APP_PASSWORD:?DATABASE_APP_PASSWORD must be set}
+    command: ["python", "-m", "app.database.migrate"]
+    networks:
+      - psychs-network
+
+  # ----------------------------------------------------------------------------
+  # 4. Psychs v2 API control plane
   # ----------------------------------------------------------------------------
   backend:
     build:
@@ -69,9 +83,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-psychs}:${POSTGRES_PASSWORD:-psychs_secure_pass_2026}@postgres:5432/${POSTGRES_DB:-psychs_db}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-psychs_redis_secret_2026}@redis:6379/0
+      - DATABASE_URL=postgresql://${DATABASE_APP_USER:-psychs_app}:${DATABASE_APP_PASSWORD:?DATABASE_APP_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-psychs_db}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/0
+      - PSYCHS_ENVIRONMENT=production
+      - PSYCHS_V2_ENABLED=true
+      - PSYCHS_JWT_SIGNING_KEY=${PSYCHS_JWT_SIGNING_KEY:?PSYCHS_JWT_SIGNING_KEY must be set}
+      - PSYCHS_JWT_ISSUER=${PSYCHS_JWT_ISSUER:-psychs-platform}
+      - PSYCHS_JWT_AUDIENCE=${PSYCHS_JWT_AUDIENCE:-psychs-api}
+      - PSYCHS_CORS_ALLOWED_ORIGINS=${PSYCHS_CORS_ALLOWED_ORIGINS:?PSYCHS_CORS_ALLOWED_ORIGINS must be set}
+      - PSYCHS_ALLOW_LEGACY_SERVER=${PSYCHS_ALLOW_LEGACY_SERVER:-false}
+      - PSYCHS_OIDC_ISSUER=${PSYCHS_OIDC_ISSUER:?PSYCHS_OIDC_ISSUER must be set}
+      - PSYCHS_OIDC_AUDIENCE=${PSYCHS_OIDC_AUDIENCE:-psychs-api}
+      - PSYCHS_OIDC_JWKS_URL=${PSYCHS_OIDC_JWKS_URL:?PSYCHS_OIDC_JWKS_URL must be set}
+      - PSYCHS_OIDC_ALGORITHMS=${PSYCHS_OIDC_ALGORITHMS:-RS256}
       - PSYCHS_EXECUTION_MODE=${PSYCHS_EXECUTION_MODE:-HYBRID_SANDBOX}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-6-astra}
@@ -91,7 +118,7 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/readyz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -104,7 +131,7 @@ services:
           memory: 4G
 
   # ----------------------------------------------------------------------------
-  # 4. Psychs Frontend Command Center (Nginx Multi-Stage Static + Reverse Proxy)
+  # 5. Psychs Frontend Command Center (Nginx Multi-Stage Static + Reverse Proxy)
   # ----------------------------------------------------------------------------
   frontend:
     build:
@@ -116,9 +143,9 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
+      - "80:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
       interval: 15s
       timeout: 3s
       retries: 3

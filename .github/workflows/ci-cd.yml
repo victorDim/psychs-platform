@@ -1,5 +1,9 @@
 name: Psychs GEO Enterprise CI/CD Pipeline
 
+concurrency:
+  group: psychs-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ "main", "master" ]
@@ -9,15 +13,15 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_BACKEND: ghcr.io/${{ github.repository }}/psychs-backend
-  IMAGE_FRONTEND: ghcr.io/${{ github.repository }}/psychs-frontend
+  IMAGE_BACKEND: ghcr.io/victordim/psychs-platform/psychs-backend
+  IMAGE_FRONTEND: ghcr.io/victordim/psychs-platform/psychs-frontend
 
 jobs:
   # ============================================================================
   # Stage 1: Static Analysis, TypeScript Verification & Backend Test Suite
   # ============================================================================
   lint-and-test:
-    name: "Lint, Type Check & Test (20/20 Suite)"
+    name: "Compile, Type Check & Test"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
@@ -29,10 +33,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Execute Psychs Backend 20/20 Test Suite
+      - name: Install Backend Dependencies
         run: |
-          cd backend
-          python run_tests.py
+          python -m pip install --requirement backend/requirements.lock
+          python -m pip check
+
+      - name: Compile and Execute Backend Test Suite
+        env:
+          PYTHONPATH: backend
+        run: |
+          python -m compileall -q backend
+          python backend/run_tests.py
+          python -m pytest -q backend/tests/test_v2_runtime.py
+
+      - name: Validate FastAPI Application and Offline Migration
+        working-directory: backend
+        env:
+          PSYCHS_ENVIRONMENT: test
+          PSYCHS_V2_ENABLED: "false"
+        run: |
+          python -c "from app.main import app; assert app.title == 'Psychs GEO Platform'"
+          alembic upgrade head --sql > /tmp/psychs-schema.sql
+          grep -q "ROW LEVEL SECURITY" /tmp/psychs-schema.sql
 
       # --- Frontend TypeScript Verification ---
       - name: Setup Node.js 20
@@ -42,11 +64,15 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Frontend Dependencies & Type Check
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type Check and Build Frontend
+        working-directory: frontend
         run: |
-          cd frontend
-          npm install
           npm run build
+          npm audit --omit=dev --audit-level=high
 
   # ============================================================================
   # Stage 2: Deployment & Kubernetes Manifests Verification
@@ -68,10 +94,11 @@ jobs:
           python -c "
           import glob
           files = sorted(glob.glob('deploy/k8s/*.yaml'))
-          assert len(files) == 4, f'Expected 4 manifests, got {len(files)}'
+          assert len(files) >= 5, f'Expected at least 5 manifests, got {len(files)}'
           for f in files:
               content = open(f).read()
               assert 'apiVersion' in content and 'kind' in content, f'Invalid manifest {f}'
+              assert 'kind: Secret' not in content, f'Commit external secrets, not Secret manifests: {f}'
               print(f'✓ Validated {f} ({len(content)} bytes)')
           print('All Kubernetes manifests validated successfully!')
           "
@@ -108,9 +135,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_BACKEND }}
           tags: |
-            type=raw,value=latest,enable=true
-            type=raw,value=v2.0.0-prod,enable=true
-            type=sha,format=short
+            type=sha,format=long
 
       - name: Build & Push Backend Image
         uses: docker/build-push-action@v5
@@ -130,9 +155,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_FRONTEND }}
           tags: |
-            type=raw,value=latest,enable=true
-            type=raw,value=v2.0.0-prod,enable=true
-            type=sha,format=short
+            type=sha,format=long
 
       - name: Build & Push Frontend Image
         uses: docker/build-push-action@v5
@@ -147,10 +170,11 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ============================================================================
-  # Stage 4: Production Cluster GitOps Deployment Rollout
+  # Stage 4: Release candidate evidence. Production promotion requires a
+  # separately reviewed GitOps change with immutable image digests.
   # ============================================================================
-  deploy-production:
-    name: "Deploy to Production Cluster"
+  release-candidate:
+    name: "Publish Release Candidate Evidence"
     needs: [build-and-push-containers]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
@@ -158,10 +182,8 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Announce Deployment Completion
+      - name: Record Release Candidate
         run: |
-          echo "========================================================================"
-          echo "PSYCHS GEO PLATFORM v2.0.0-PROD SUCCESSFULLY DEPLOYED TO CLUSTER"
-          echo "Frontend Ingress: https://geo.psychs.ai"
-          echo "Backend Gateway:  https://geo.psychs.ai/api/v1/health"
-          echo "========================================================================"
+          echo "Images for commit $GITHUB_SHA were published to GHCR."
+          echo "No production deployment was performed by this workflow."
+          echo "Promote only after security review, migration validation, and rollback approval."

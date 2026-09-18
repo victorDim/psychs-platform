@@ -48,11 +48,11 @@ class ConfigManager:
             glm_model=os.environ.get("GLM_MODEL", "glm-4-plus"),
             grok_api_key=os.environ.get("GROK_API_KEY", ""),
             grok_model=os.environ.get("GROK_MODEL", "grok-3"),
-            proxy_url=os.environ.get("PROXY_ROTATING_URL", "http://res_user_7894:pass_x882@us-east.brightdata.io:22225"),
+            proxy_url=os.environ.get("PROXY_ROTATING_URL", ""),
             execution_mode=os.environ.get("PSYCHS_EXECUTION_MODE", "HYBRID_SANDBOX"),
-            proxy_enabled=True,
-            active_proxy_provider="BrightData Residential Pool (US-East / EU-Central)",
-            total_proxies_online=4250
+            proxy_enabled=bool(os.environ.get("PROXY_ROTATING_URL", "")),
+            active_proxy_provider=os.environ.get("PROXY_PROVIDER_NAME", "Not configured"),
+            total_proxies_online=int(os.environ.get("PROXY_TOTAL_ONLINE", "0"))
         )
 
     @classmethod
@@ -85,10 +85,14 @@ class ConfigManager:
             else:
                 data[key] = ""
         
-        # Mask proxy password if present
-        if "@" in data["proxy_url"]:
-            parts = data["proxy_url"].split("@")
-            data["proxy_url_masked"] = f"http://***:***@{parts[1]}"
+        # Never preserve the original proxy credential in an API response.
+        proxy_url = data.get("proxy_url", "")
+        if "@" in proxy_url:
+            scheme, _, remainder = proxy_url.partition("://")
+            host = remainder.rsplit("@", 1)[-1]
+            masked_proxy = f"{scheme or 'http'}://***:***@{host}"
         else:
-            data["proxy_url_masked"] = data["proxy_url"]
+            masked_proxy = proxy_url
+        data["proxy_url"] = masked_proxy
+        data["proxy_url_masked"] = masked_proxy
         return data

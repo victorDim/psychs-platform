@@ -1,0 +1,49 @@
+# Run this Job as an explicit, reviewed pre-deployment step. The migration
+# credential is a database owner and must never be mounted into the API pods.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: psychs-database-migration
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-database-migration
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: psychs-database-migration
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/victordim/psychs-platform/psychs-backend:sha-REPLACE_WITH_COMMIT_SHA
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: MIGRATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-migration-secrets
+                  key: database-url
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

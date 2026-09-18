@@ -39,20 +39,24 @@ spec:
     metadata:
       labels:
         app: psychs-backend
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8000"
-        prometheus.io/path: "/metrics"
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
-          image: ghcr.io/psychs-ai/psychs-backend:v2.0.0-prod
+          image: ghcr.io/victordim/psychs-platform/psychs-backend:sha-REPLACE_WITH_COMMIT_SHA
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8000
               name: http
@@ -60,12 +64,20 @@ spec:
             - configMapRef:
                 name: psychs-config
             - secretRef:
-                name: psychs-secrets
+                name: psychs-runtime-secrets
           env:
+            - name: PSYCHS_ENVIRONMENT
+              value: "production"
             - name: DATABASE_URL
-              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)"
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-runtime-secrets
+                  key: database-url
             - name: REDIS_URL
-              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-runtime-secrets
+                  key: redis-url
           resources:
             requests:
               cpu: "1000m"
@@ -75,7 +87,7 @@ spec:
               memory: "8Gi"
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /readyz
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -83,12 +95,26 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /livez
               port: 8000
             initialDelaySeconds: 15
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

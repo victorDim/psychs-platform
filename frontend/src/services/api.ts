@@ -110,25 +110,35 @@ import {
   initialTenantKey
 } from '../mockData/defaultData';
 
-const BASE_URL = 'http://127.0.0.1:8000/api/v1';
+const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+const BASE_URL = (configuredBaseUrl || '/api/v1').replace(/\/$/, '');
+const DEMO_FALLBACK_ENABLED = import.meta.env.VITE_ENABLE_DEMO_FALLBACK === 'true';
 
 async function fetchWithFallback<T>(endpoint: string, options: RequestInit = {}, fallback: T): Promise<T> {
   try {
     const res = await fetch(`${BASE_URL}${endpoint}`, {
       ...options,
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         ...options.headers,
       },
     });
     if (!res.ok) {
-      console.warn(`API error on ${endpoint}: ${res.statusText}. Using fallback.`);
-      return fallback;
+      const error = new Error(`API request failed on ${endpoint}: ${res.status} ${res.statusText}`);
+      if (DEMO_FALLBACK_ENABLED) {
+        console.warn(`${error.message}. Explicit demo fallback is enabled.`);
+        return fallback;
+      }
+      throw error;
     }
     return await res.json();
   } catch (err) {
-    console.warn(`Network error fetching ${endpoint}. Using fallback data.`, err);
-    return fallback;
+    if (DEMO_FALLBACK_ENABLED) {
+      console.warn(`Network error fetching ${endpoint}. Explicit demo fallback is enabled.`, err);
+      return fallback;
+    }
+    throw err;
   }
 }
 
@@ -447,8 +457,8 @@ export const api = {
         glm_model: 'glm-4-plus',
         grok_api_key: 'xai-...99C1',
         grok_model: 'grok-3',
-        proxy_url: 'http://res_user_7894:pass_x882@us-east.brightdata.io:22225',
-        proxy_url_masked: 'http://***:***@us-east.brightdata.io:22225',
+        proxy_url: '',
+        proxy_url_masked: '',
         execution_mode: 'HYBRID_SANDBOX' as const,
         proxy_enabled: true,
         active_proxy_provider: 'BrightData Residential Pool (US-East / EU-Central)',
@@ -3870,7 +3880,6 @@ export const api = {
     });
   }
 };
-
 
 
 

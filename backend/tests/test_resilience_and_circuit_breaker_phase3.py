@@ -97,5 +97,6 @@ def test_live_engine_dispatcher_circuit_breaking():
     """Verify LiveEngineDispatcher query methods gracefully fallback when circuit is open."""
     res = LiveEngineDispatcher.query_perplexity("Test query under resilience")
     assert res.engine_name.startswith("Perplexity.ai")
-    assert res.status in ["SUCCESS", "FALLBACK_MOCK"]
+    assert res.status in ["SUCCESS", "SYNTHETIC_FALLBACK"]
+    assert res.is_live is (res.status == "SUCCESS")
     assert len(res.citations) >= 1

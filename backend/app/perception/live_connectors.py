@@ -49,6 +49,17 @@ class ResidentialProxyManager:
     @staticmethod
     def test_proxy_health() -> Dict[str, Any]:
         config = ConfigManager.get_instance().get_settings()
+        if not config.proxy_enabled or not config.proxy_url:
+            return {
+                "status": "NOT_CONFIGURED",
+                "provider": "Not configured",
+                "active_ips": 0,
+                "rotation_interval_seconds": None,
+                "geo_coverage": [],
+                "egress_ip_pool": None,
+                "active_egress_region": None,
+                "average_latency_ms": 0.0,
+            }
         resilience = UpstreamResilienceManager.get_instance().get_resilience_status()
         return {
             "status": resilience.get("status", "HEALTHY"),
@@ -82,8 +93,8 @@ class LiveEngineDispatcher:
                     "https://gartner.com/reviews/market/ai-perception-management"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -149,8 +160,8 @@ class LiveEngineDispatcher:
                     "https://techcrunch.com/2026/geo-brand-perception-breakthrough"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -211,8 +222,8 @@ class LiveEngineDispatcher:
                     "https://reddit.com/r/SEO/comments/psychs_geo_review"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -270,8 +281,8 @@ class LiveEngineDispatcher:
                     "https://anthropic.com/research/geo-enterprise-eval"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -332,8 +343,8 @@ class LiveEngineDispatcher:
                     "https://open.bigmodel.cn"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -393,8 +404,8 @@ class LiveEngineDispatcher:
                     "https://x.ai"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -454,8 +465,8 @@ class LiveEngineDispatcher:
                     "https://deepseek.com/research/r1-evaluation"
                 ],
                 latency_ms=latency,
-                status="FALLBACK_MOCK" if not key else "SUCCESS",
-                is_live=bool(key),
+                status="SYNTHETIC_FALLBACK",
+                is_live=False,
                 model_version=model
             )
 
@@ -505,7 +516,7 @@ class LiveEngineDispatcher:
         if "perplexity" in provider_lower:
             key = config.perplexity_api_key
             model = config.perplexity_model or "sonar-reasoning-pro"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"Perplexity ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -524,7 +535,7 @@ class LiveEngineDispatcher:
         elif "openai" in provider_lower or "gpt" in provider_lower:
             key = config.openai_api_key
             model = config.openai_model or "gpt-6-astra"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"OpenAI ChatGPT Search ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -543,7 +554,7 @@ class LiveEngineDispatcher:
         elif "gemini" in provider_lower or "google" in provider_lower:
             key = config.gemini_api_key
             model = config.gemini_model or "gemini-3.7-flash"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"Google Gemini ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -562,7 +573,7 @@ class LiveEngineDispatcher:
         elif "claude" in provider_lower or "anthropic" in provider_lower:
             key = config.anthropic_api_key
             model = config.anthropic_model or "claude-fable-5.1"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"Anthropic Claude ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -581,7 +592,7 @@ class LiveEngineDispatcher:
         elif "glm" in provider_lower or "zhipu" in provider_lower:
             key = config.glm_api_key
             model = config.glm_model or "glm-4-plus"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"Zhipu AI GLM ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -600,7 +611,7 @@ class LiveEngineDispatcher:
         elif "grok" in provider_lower or "xai" in provider_lower:
             key = config.grok_api_key
             model = config.grok_model or "grok-3"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"xAI Grok ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -619,7 +630,7 @@ class LiveEngineDispatcher:
         elif "deepseek" in provider_lower:
             key = config.deepseek_api_key
             model = config.deepseek_model or "deepseek-reasoner"
-            if not key:
+            if not key or config.execution_mode != "LIVE":
                 return ConnectionPingResult(
                     provider_name=f"DeepSeek ({model})",
                     status="READY_SANDBOX_MOCK",
@@ -638,10 +649,14 @@ class LiveEngineDispatcher:
         elif "proxy" in provider_lower or "brightdata" in provider_lower:
             health = ResidentialProxyManager.test_proxy_health()
             return ConnectionPingResult(
-                provider_name="BrightData Residential Pool",
-                status="CONNECTED_LIVE",
+                provider_name=health["provider"],
+                status="CONNECTED_LIVE" if health["status"] == "HEALTHY" else health["status"],
                 latency_ms=health["average_latency_ms"],
-                message="4,250 residential IPs active across US-East, US-West, EU-Central, APAC.",
+                message=(
+                    f"{health['active_ips']} proxy endpoints are configured."
+                    if health["status"] == "HEALTHY"
+                    else "Residential proxy routing is not configured."
+                ),
                 timestamp=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
             )
         else:

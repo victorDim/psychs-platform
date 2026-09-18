@@ -52,7 +52,8 @@ from tests.test_multibrand_simulation import (
 )
 from tests.test_reporting_engine import (
     test_board_report_generation_and_seal,
-    test_historical_report_archive
+    test_historical_report_archive,
+    test_report_html_escapes_untrusted_content
 )
 from tests.test_crawler_ingestion import (
     test_autonomous_crawler_and_schema_synthesis,
@@ -149,6 +150,11 @@ from tests.test_resilience_and_circuit_breaker_phase3 import (
     test_resilience_status_telemetry,
     test_live_engine_dispatcher_circuit_breaking
 )
+from tests.test_v2_foundation import (
+    test_v2_request_context_is_immutable,
+    test_v2_policy_requires_role_and_scope,
+    test_v2_migration_forces_rls_with_write_checks,
+)
 from app.intelligence.geo_variant_autopilot import GeoVariantAutopilotEngine
 from app.intelligence.knowledge_poisoning_sentinel import KnowledgePoisoningSentinelEngine
 from app.intelligence.buyer_journey_simulator import BuyerJourneySimulatorEngine
@@ -198,6 +204,7 @@ def run_all():
         ("test_multibrand_scoring_and_isolation", test_multibrand_scoring_and_isolation),
         ("test_board_report_generation_and_seal", test_board_report_generation_and_seal),
         ("test_historical_report_archive", test_historical_report_archive),
+        ("test_report_html_escapes_untrusted_content", test_report_html_escapes_untrusted_content),
         ("test_autonomous_crawler_and_schema_synthesis", test_autonomous_crawler_and_schema_synthesis),
         ("test_crawler_prompt_injection_stripping", test_crawler_prompt_injection_stripping),
         ("test_ingested_domains_archive_query", test_ingested_domains_archive_query),
@@ -270,6 +277,7 @@ def run_all():
         ("test_ssrf_allows_public_domains", lambda: sec_phase1.test_ssrf_allows_public_domains()),
         ("test_crawler_ssrf_defense_integration", lambda: sec_phase1.test_crawler_ssrf_defense_integration()),
         ("test_jwt_mint_verify_and_rbac_permission", lambda: sec_phase1.test_jwt_mint_verify_and_rbac_permission()),
+        ("test_authentication_fails_closed_and_route_policies_are_centralized", lambda: sec_phase1.test_authentication_fails_closed_and_route_policies_are_centralized()),
         ("test_dynamic_cryptographic_salts", lambda: sec_phase1.test_dynamic_cryptographic_salts()),
         ("test_audit_vault_persistence_and_hydration", test_audit_vault_persistence_and_hydration),
         ("test_crypto_shredding_persistence_and_cascading_purge", test_crypto_shredding_persistence_and_cascading_purge),
@@ -281,6 +289,9 @@ def run_all():
         ("test_multi_region_proxy_failover", test_multi_region_proxy_failover),
         ("test_resilience_status_telemetry", test_resilience_status_telemetry),
         ("test_live_engine_dispatcher_circuit_breaking", test_live_engine_dispatcher_circuit_breaking),
+        ("test_v2_request_context_is_immutable", test_v2_request_context_is_immutable),
+        ("test_v2_policy_requires_role_and_scope", test_v2_policy_requires_role_and_scope),
+        ("test_v2_migration_forces_rls_with_write_checks", test_v2_migration_forces_rls_with_write_checks),
     ]
 
     passed = 0

@@ -7,12 +7,15 @@ import asyncio
 import os
 import hmac
 import hashlib
+import socket
+from unittest.mock import patch
 from app.ingestion.ssrf_guard import is_safe_public_url
 from app.ingestion.crawler import IngestionPipeline
 from app.auth.session_vault import SessionVault
 from app.auth.rbac import RBACManager, UserRole, Permission
 from app.database.audit_vault import ImmutableAuditVault
 from app.optimization.cms_webhooks import CmsWebhookManager, PublishDeploymentRequest
+from server import PsychsAPIHandler
 
 
 class TestSecurityPhase1(unittest.TestCase):
@@ -26,7 +29,10 @@ class TestSecurityPhase1(unittest.TestCase):
             "http://172.16.0.1/db",
             "http://169.254.169.254/latest/meta-data/",  # Cloud metadata
             "http://metadata.google.internal/computeMetadata/v1/",
-            "http://[::1]:8000"
+            "http://[::1]:8000",
+            "file:///etc/passwd",
+            "https://user:password@example.com/private",
+            "https://example.com:8443/admin",
         ]
         for target in blocked_targets:
             is_safe, reason = is_safe_public_url(target)
@@ -39,9 +45,11 @@ class TestSecurityPhase1(unittest.TestCase):
             "https://forbes.com",
             "https://gartner.com"
         ]
-        for target in public_targets:
-            is_safe, reason = is_safe_public_url(target)
-            self.assertTrue(is_safe, f"Public target {target} was unexpectedly blocked: {reason}")
+        public_dns_result = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        with patch("app.ingestion.ssrf_guard.socket.getaddrinfo", return_value=public_dns_result):
+            for target in public_targets:
+                is_safe, reason = is_safe_public_url(target)
+                self.assertTrue(is_safe, f"Public target {target} was unexpectedly blocked: {reason}")
 
     def test_crawler_ssrf_defense_integration(self):
         """Verify the ingestion crawler aborts with SSRF_BLOCKED when given internal IPs."""
@@ -85,6 +93,59 @@ class TestSecurityPhase1(unittest.TestCase):
         self.assertFalse(RBACManager.has_permission(analyst_payload["role"], Permission.EXECUTE_CRYPTO_SHRED))
         self.assertFalse(RBACManager.has_permission(analyst_payload["role"], Permission.ROTATE_API_KEYS))
 
+        # Session inventory must never expose the raw bearer token.
+        session = vault.create_session(
+            user_id="usr-safe-session",
+            user_email="safe-session@psychs.ai",
+            tenant_id="ten_enterprise_prod_01",
+            role="ANALYST_VIEWER",
+            ip_address="127.0.0.1",
+            user_agent="SecurityTest"
+        )
+        self.assertIn("token", session)
+        listed = next(s for s in vault.list_active_sessions() if s["session_id"] == session["session_id"])
+        self.assertNotIn("token", listed)
+        self.assertIn("token_jti", listed)
+
+    def test_authentication_fails_closed_and_route_policies_are_centralized(self):
+        handler = object.__new__(PsychsAPIHandler)
+        handler.headers = {}
+        old_environment = os.environ.get("PSYCHS_ENVIRONMENT")
+        old_demo_auth = os.environ.get("PSYCHS_ALLOW_INSECURE_DEMO_AUTH")
+        try:
+            os.environ["PSYCHS_ENVIRONMENT"] = "development"
+            os.environ["PSYCHS_ALLOW_INSECURE_DEMO_AUTH"] = "false"
+            self.assertIsNone(handler._authenticate_request())
+
+            os.environ["PSYCHS_ALLOW_INSECURE_DEMO_AUTH"] = "true"
+            self.assertEqual(handler._authenticate_request()["auth_mode"], "INSECURE_LOCAL_DEMO")
+
+            os.environ["PSYCHS_ENVIRONMENT"] = "production"
+            self.assertIsNone(handler._authenticate_request())
+
+            self.assertIsNone(handler._permission_for_request("GET", "/api/v1/health"))
+            self.assertEqual(
+                handler._permission_for_request("GET", "/api/v1/auth/sessions"),
+                Permission.MANAGE_USERS,
+            )
+            self.assertEqual(
+                handler._permission_for_request("POST", "/api/v1/security/crypto-shred"),
+                Permission.EXECUTE_CRYPTO_SHRED,
+            )
+            self.assertEqual(
+                handler._permission_for_request("POST", "/api/v1/optimization/publish"),
+                Permission.MERGE_GITOPS_PR,
+            )
+        finally:
+            if old_environment is None:
+                os.environ.pop("PSYCHS_ENVIRONMENT", None)
+            else:
+                os.environ["PSYCHS_ENVIRONMENT"] = old_environment
+            if old_demo_auth is None:
+                os.environ.pop("PSYCHS_ALLOW_INSECURE_DEMO_AUTH", None)
+            else:
+                os.environ["PSYCHS_ALLOW_INSECURE_DEMO_AUTH"] = old_demo_auth
+
     def test_dynamic_cryptographic_salts(self):
         """Verify WORM audit vault and CMS Webhooks generate tamper-evident signatures."""
         # 1. Audit Vault Log with Dynamic Salt
@@ -101,17 +162,33 @@ class TestSecurityPhase1(unittest.TestCase):
         self.assertEqual(len(log.hmac_signature), 64)
 
         # 2. CMS Webhook with Dynamic Secret
-        deploy_req = PublishDeploymentRequest(
+        approval_secret = "test-only-cms-approval-secret-at-least-32-chars"
+        os.environ["CMS_APPROVAL_SECRET"] = approval_secret
+        unsigned_req = PublishDeploymentRequest(
             diff_id="DIFF-SEC-01",
             platform_name="WordPress",
             target_environment="PRODUCTION",
-            approver_signature="SIG-VERIFIED",
+            approver_signature="",
             approver_email="secops@psychs.ai",
             content_payload="Sample Hardened Content Payload"
         )
+        signature = hmac.new(
+            approval_secret.encode("utf-8"),
+            CmsWebhookManager.approval_payload(unsigned_req),
+            hashlib.sha256,
+        ).hexdigest()
+        deploy_req = PublishDeploymentRequest(
+            **{**unsigned_req.model_dump(), "approver_signature": signature}
+        )
         res = CmsWebhookManager.publish_diff(deploy_req)
         self.assertTrue(res.hmac_signature_verified)
-        self.assertEqual(res.status, "SUCCESS")
+        self.assertEqual(res.status, "APPROVED_NOT_DISPATCHED")
+
+        invalid_req = PublishDeploymentRequest(
+            **{**unsigned_req.model_dump(), "approver_signature": "invalid"}
+        )
+        with self.assertRaises(PermissionError):
+            CmsWebhookManager.publish_diff(invalid_req)
 
 
 if __name__ == "__main__":

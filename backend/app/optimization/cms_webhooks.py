@@ -36,6 +36,17 @@ class PublishDeploymentResponse(BaseModel):
 import os
 
 class CmsWebhookManager:
+    @staticmethod
+    def approval_payload(req: PublishDeploymentRequest) -> bytes:
+        content_hash = hashlib.sha256(req.content_payload.encode("utf-8")).hexdigest()
+        return "|".join([
+            req.diff_id,
+            req.platform_name,
+            req.target_environment,
+            req.approver_email,
+            content_hash,
+        ]).encode("utf-8")
+
     @classmethod
     def get_configured_webhooks(cls) -> List[WebhookEndpoint]:
         return [
@@ -75,20 +86,26 @@ class CmsWebhookManager:
 
     @classmethod
     def publish_diff(cls, req: PublishDeploymentRequest) -> PublishDeploymentResponse:
-        raw_secret = os.environ.get("CMS_WEBHOOK_SECRET", f"psychs_webhook_sec_{hashlib.sha256(req.platform_name.encode()).hexdigest()[:16]}")
-        secret = raw_secret.encode('utf-8')
-        computed_sig = hmac.new(secret, req.content_payload.encode('utf-8'), hashlib.sha256).hexdigest()
+        approval_secret = os.environ.get("CMS_APPROVAL_SECRET", "")
+        if len(approval_secret) < 32:
+            raise RuntimeError("CMS_APPROVAL_SECRET is not configured securely")
+        expected_signature = hmac.new(
+            approval_secret.encode("utf-8"),
+            cls.approval_payload(req),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected_signature, req.approver_signature):
+            raise PermissionError("CMS approval signature is invalid for this exact proposal")
         
         deploy_id = f"DEP-{hashlib.md5(str(time.time()).encode()).hexdigest()[:8].upper()}"
-        target_slug = "generative-engine-optimization-enterprise"
         
         return PublishDeploymentResponse(
             deployment_id=deploy_id,
             platform_name=req.platform_name,
             target_environment=req.target_environment,
-            status="SUCCESS",
-            http_status_code=200,
-            hmac_signature_verified=bool(computed_sig),
-            live_url=f"https://psychs.ai/{target_slug}",
+            status="APPROVED_NOT_DISPATCHED",
+            http_status_code=202,
+            hmac_signature_verified=True,
+            live_url="",
             timestamp=time.time()
         )

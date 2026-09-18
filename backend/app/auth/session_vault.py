@@ -14,6 +14,8 @@ import hmac
 import hashlib
 import uuid
 import threading
+import os
+import secrets
 from typing import Dict, Any, List, Optional
 
 class SessionVault:
@@ -29,27 +31,21 @@ class SessionVault:
             return cls._instance
 
     def _init_vault(self):
-        self._signing_key = "psychs_enterprise_jwt_signing_key_secret_2026"
+        environment = os.environ.get("PSYCHS_ENVIRONMENT", "development").strip().lower()
+        configured_key = os.environ.get("PSYCHS_JWT_SIGNING_KEY", "")
+        if environment in {"production", "staging"} and len(configured_key) < 32:
+            raise RuntimeError(
+                "PSYCHS_JWT_SIGNING_KEY must be configured with at least 32 characters "
+                f"when PSYCHS_ENVIRONMENT={environment}"
+            )
+
+        # Development gets an ephemeral process-local key. It is intentionally not
+        # stable across restarts and must never be treated as a production secret.
+        self._signing_key = configured_key or secrets.token_urlsafe(48)
+        self._issuer = os.environ.get("PSYCHS_JWT_ISSUER", "psychs-platform")
+        self._audience = os.environ.get("PSYCHS_JWT_AUDIENCE", "psychs-api")
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
         self._revoked_tokens: set = set()
-        
-        # Pre-populate sample active sessions
-        self.create_session(
-            user_id="usr-admin-01",
-            user_email="chief.architect@psychs.ai",
-            tenant_id="tenant-psychs-master",
-            role="SUPER_ADMIN",
-            ip_address="192.168.1.42",
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/134.0.0.0"
-        )
-        self.create_session(
-            user_id="usr-brand-03",
-            user_email="brand.director@enterprise-corp.com",
-            tenant_id="tenant-enterprise-corp",
-            role="BRAND_MANAGER",
-            ip_address="10.0.4.19",
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
-        )
 
     def _base64url_encode(self, data: bytes) -> str:
         return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
@@ -67,6 +63,8 @@ class SessionVault:
         token_payload["iat"] = now
         token_payload["exp"] = now + expiry_seconds
         token_payload["jti"] = uuid.uuid4().hex
+        token_payload.setdefault("iss", self._issuer)
+        token_payload.setdefault("aud", self._audience)
 
         header_b64 = self._base64url_encode(json.dumps(header).encode('utf-8'))
         payload_b64 = self._base64url_encode(json.dumps(token_payload).encode('utf-8'))
@@ -78,23 +76,31 @@ class SessionVault:
         return f"{header_b64}.{payload_b64}.{sig_b64}"
 
     def verify_jwt(self, token: str) -> Optional[Dict[str, Any]]:
-        parts = token.split('.')
-        if len(parts) != 3:
+        try:
+            parts = token.split('.')
+            if len(parts) != 3:
+                return None
+
+            header_b64, payload_b64, sig_b64 = parts
+            header = json.loads(self._base64url_decode(header_b64).decode('utf-8'))
+            if header.get("alg") != "HS256" or header.get("typ") != "JWT":
+                return None
+
+            message = f"{header_b64}.{payload_b64}".encode('utf-8')
+            expected_sig = hmac.new(self._signing_key.encode('utf-8'), message, hashlib.sha256).digest()
+            actual_sig = self._base64url_decode(sig_b64)
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                return None
+
+            payload_bytes = self._base64url_decode(payload_b64)
+            payload = json.loads(payload_bytes.decode('utf-8'))
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
             return None
 
-        header_b64, payload_b64, sig_b64 = parts
-        message = f"{header_b64}.{payload_b64}".encode('utf-8')
-        expected_sig = hmac.new(self._signing_key.encode('utf-8'), message, hashlib.sha256).digest()
-        actual_sig = self._base64url_decode(sig_b64)
-
-        if not hmac.compare_digest(expected_sig, actual_sig):
+        now = time.time()
+        if payload.get("exp", 0) < now or payload.get("iat", now + 1) > now + 60:
             return None
-
-        payload_bytes = self._base64url_decode(payload_b64)
-        payload = json.loads(payload_bytes.decode('utf-8'))
-
-        # Check expiration & revocation
-        if payload.get("exp", 0) < time.time():
+        if payload.get("iss") != self._issuer or payload.get("aud") != self._audience:
             return None
         if payload.get("jti") in self._revoked_tokens:
             return None
@@ -128,22 +134,23 @@ class SessionVault:
             "role": role,
             "ip_address": ip_address,
             "user_agent": user_agent,
-            "token": token,
+            # Raw bearer tokens are returned once to the caller, but never kept in
+            # objects exposed by session-list APIs.
+            "token_jti": self.verify_jwt(token).get("jti"),
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "last_activity": "Just now",
             "status": "ACTIVE"
         }
         self._active_sessions[session_id] = session
-        return session
+        return {**session, "token": token}
 
     def list_active_sessions(self) -> List[Dict[str, Any]]:
-        return list(self._active_sessions.values())
+        return [dict(session) for session in self._active_sessions.values()]
 
     def revoke_session(self, session_id: str) -> bool:
         if session_id in self._active_sessions:
             sess = self._active_sessions.pop(session_id)
-            verified = self.verify_jwt(sess["token"])
-            if verified and "jti" in verified:
-                self._revoked_tokens.add(verified["jti"])
+            if sess.get("token_jti"):
+                self._revoked_tokens.add(sess["token_jti"])
             return True
         return False
