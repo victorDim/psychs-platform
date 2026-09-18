@@ -1,5 +1,6 @@
 """Dependency-free tests for v2 context, policy, and migration invariants."""
 
+import ast
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from uuid import uuid4
@@ -60,3 +61,14 @@ def test_v2_migration_forces_rls_with_write_checks():
     attempts = migrations["0003_domain_verification_attempts.py"]
     assert 'down_revision = "0002_authoritative_sources"' in attempts
     assert "attempt_count >= 0" in attempts
+
+    for migration_name, migration in migrations.items():
+        module = ast.parse(migration)
+        revision = next(
+            node.value.value
+            for node in module.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "revision" for target in node.targets)
+            and isinstance(node.value, ast.Constant)
+        )
+        assert len(revision) <= 32, f"{migration_name} exceeds Alembic's default version_num width"
