@@ -28,6 +28,7 @@ The new `/api/v2` foundation adds:
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
 - a production control-plane UI that renders only authenticated `/api/v2` records;
+- vendor-neutral OTLP/HTTP tracing correlated with structured request logs;
 - dependency-aware startup/readiness and structured request logs.
 
 ## Local verification

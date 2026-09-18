@@ -64,6 +64,25 @@ def test_production_settings_fail_closed_when_incomplete():
         V2Settings(_env_file=None, PSYCHS_ENVIRONMENT="production")
 
 
+def test_telemetry_configuration_fails_closed_and_requires_tls_in_production():
+    with pytest.raises(ValidationError):
+        V2Settings(_env_file=None, PSYCHS_ENVIRONMENT="test", OTEL_ENABLED=True)
+    with pytest.raises(ValidationError):
+        V2Settings(
+            _env_file=None,
+            PSYCHS_ENVIRONMENT="production",
+            PSYCHS_V2_ENABLED=True,
+            DATABASE_URL="postgresql://app:secret@example.test/psychs",
+            REDIS_URL="rediss://example.test/0",
+            PSYCHS_CORS_ALLOWED_ORIGINS="https://app.example.test",
+            PSYCHS_OIDC_ISSUER="https://identity.example.test/",
+            PSYCHS_OIDC_AUDIENCE="psychs-api",
+            PSYCHS_OIDC_JWKS_URL="https://identity.example.test/jwks",
+            OTEL_ENABLED=True,
+            OTEL_EXPORTER_OTLP_ENDPOINT="http://collector:4318/v1/traces",
+        )
+
+
 def test_oidc_rejects_symmetric_or_unsigned_algorithms():
     for algorithm in ("HS256", "none", ""):
         with pytest.raises(ValidationError):

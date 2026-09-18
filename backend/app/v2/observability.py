@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import Request
+from opentelemetry import trace
 
 
 class JsonFormatter(logging.Formatter):
@@ -22,6 +23,10 @@ class JsonFormatter(logging.Formatter):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            payload["trace_id"] = format(span_context.trace_id, "032x")
+            payload["span_id"] = format(span_context.span_id, "016x")
         return json.dumps(payload, separators=(",", ":"))
 
 

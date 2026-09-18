@@ -23,6 +23,10 @@ class V2Settings(BaseSettings):
     oidc_algorithms_raw: str = Field(default="RS256", validation_alias="PSYCHS_OIDC_ALGORITHMS")
     database_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DATABASE_POOL_SIZE")
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
+    otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")
+    otel_exporter_otlp_endpoint: str = Field(default="", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_service_name: str = Field(default="psychs-api", validation_alias="OTEL_SERVICE_NAME")
+    otel_trace_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0, validation_alias="OTEL_TRACE_SAMPLE_RATIO")
 
     @property
     def cors_allowed_origins(self) -> list[str]:
@@ -47,6 +51,11 @@ class V2Settings(BaseSettings):
             raise ValueError("Only approved asymmetric OIDC signing algorithms are permitted")
         if any("*" in origin for origin in self.cors_allowed_origins):
             raise ValueError("Wildcard CORS origins are not permitted")
+        if self.otel_enabled:
+            if not self.otel_exporter_otlp_endpoint:
+                raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true")
+            if self.environment in {"staging", "production"} and not self.otel_exporter_otlp_endpoint.startswith("https://"):
+                raise ValueError("Production OTLP export must use HTTPS")
 
         if self.environment in {"staging", "production"}:
             required = {

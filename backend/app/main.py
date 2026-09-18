@@ -95,6 +95,10 @@ if settings.v2_enabled:
 
     app.include_router(v2_router)
 
+from .v2.telemetry import configure_telemetry
+
+configure_telemetry(app, settings, VERSION)
+
 
 if (
     ENVIRONMENT == "development"
