@@ -18,6 +18,10 @@ RUN npm run build
 # Stage 2: Production Nginx Server
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
 
+# Image assembly needs temporary root access to replace vendor-owned files.
+# Runtime drops back to the unprivileged nginx account below.
+USER root
+
 # Remove default nginx configs
 RUN rm -rf /etc/nginx/conf.d/* /usr/share/nginx/html/*
 
@@ -26,6 +30,10 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 # Copy compiled static assets from builder
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+RUN chown -R nginx:nginx /etc/nginx /usr/share/nginx/html
+
+USER nginx
 
 # Expose HTTP port
 EXPOSE 8080
