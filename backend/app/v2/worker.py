@@ -17,6 +17,14 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .domain_verification import DnsVerificationUnavailable, dns_txt_matches
+from .metrics import (
+    record_job_claim,
+    record_job_outcome,
+    record_retry_delay,
+    record_worker_loop_failure,
+)
+from .observability import configure_logging
+from .telemetry import configure_worker_metrics, shutdown_metrics
 
 
 LOGGER = logging.getLogger("psychs.worker")
@@ -35,12 +43,27 @@ class WorkerSettings:
     poll_seconds: float = 2.0
     retry_base_seconds: int = 10
     retry_cap_seconds: int = 900
+    environment: str = "production"
+    otel_enabled: bool = False
+    otel_metrics_endpoint: str = ""
+    otel_service_name: str = "psychs-worker"
 
     @classmethod
     def from_environment(cls) -> "WorkerSettings":
         database_url = os.environ.get("DATABASE_WORKER_URL", "").strip()
         if not database_url:
             raise RuntimeError("DATABASE_WORKER_URL is required")
+        otel_enabled_raw = os.environ.get("OTEL_ENABLED", "false").strip().lower()
+        if otel_enabled_raw not in {"true", "false"}:
+            raise RuntimeError("OTEL_ENABLED must be true or false")
+        trace_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip().rstrip("/")
+        metrics_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "").strip()
+        if not metrics_endpoint and trace_endpoint:
+            metrics_endpoint = (
+                f"{trace_endpoint.removesuffix('/v1/traces')}/v1/metrics"
+                if trace_endpoint.endswith("/v1/traces")
+                else f"{trace_endpoint}/v1/metrics"
+            )
         settings = cls(
             database_url=database_url.replace("postgresql+psycopg://", "postgresql://", 1),
             worker_id=os.environ.get("PSYCHS_WORKER_ID", "").strip() or f"{socket.gethostname()}:{os.getpid()}",
@@ -48,6 +71,10 @@ class WorkerSettings:
             poll_seconds=float(os.environ.get("PSYCHS_JOB_POLL_SECONDS", "2")),
             retry_base_seconds=int(os.environ.get("PSYCHS_JOB_RETRY_BASE_SECONDS", "10")),
             retry_cap_seconds=int(os.environ.get("PSYCHS_JOB_RETRY_CAP_SECONDS", "900")),
+            environment=os.environ.get("PSYCHS_ENVIRONMENT", "production").strip().lower(),
+            otel_enabled=otel_enabled_raw == "true",
+            otel_metrics_endpoint=metrics_endpoint,
+            otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "psychs-worker").strip(),
         )
         if not 15 <= settings.lease_seconds <= 3600:
             raise RuntimeError("PSYCHS_JOB_LEASE_SECONDS must be between 15 and 3600")
@@ -57,6 +84,18 @@ class WorkerSettings:
             raise RuntimeError("Job retry timing is invalid")
         if len(settings.worker_id) > 128:
             raise RuntimeError("PSYCHS_WORKER_ID must contain at most 128 characters")
+        if not settings.otel_service_name or len(settings.otel_service_name) > 128:
+            raise RuntimeError("OTEL_SERVICE_NAME must contain between 1 and 128 characters")
+        if settings.environment not in {"development", "test", "staging", "production"}:
+            raise RuntimeError("PSYCHS_ENVIRONMENT is invalid")
+        if settings.otel_enabled and not settings.otel_metrics_endpoint:
+            raise RuntimeError("An OTLP endpoint is required when OTEL_ENABLED is true")
+        if (
+            settings.otel_enabled
+            and settings.environment in {"staging", "production"}
+            and not settings.otel_metrics_endpoint.startswith("https://")
+        ):
+            raise RuntimeError("Production OTLP metrics export must use HTTPS")
         return settings
 
 
@@ -95,6 +134,7 @@ def _record_event(
 
 def _reap_exhausted_leases(connection: psycopg.Connection, worker_id: str) -> int:
     """Dead-letter final attempts whose workers disappeared after claiming them."""
+    reaped_job_types: list[str] = []
     with connection.transaction(), connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
@@ -121,7 +161,11 @@ def _reap_exhausted_leases(connection: psycopg.Connection, worker_id: str) -> in
                    VALUES (%s, %s, %s) ON CONFLICT (tenant_id, job_id) DO NOTHING""",
                 (job.tenant_id, job.id, error),
             )
-        return len(rows)
+            _audit(cursor, job, "job.dead_letter", {"job_type": job.job_type, "error": error})
+            reaped_job_types.append(job.job_type)
+    for job_type in reaped_job_types:
+        record_job_outcome(job_type, "dead_letter", 0)
+    return len(reaped_job_types)
 
 
 def claim_next_job(connection: psycopg.Connection, settings: WorkerSettings) -> ClaimedJob | None:
@@ -175,7 +219,9 @@ def _audit(cursor: psycopg.Cursor, job: ClaimedJob, action: str, payload: dict) 
     )
 
 
-def complete_job(connection: psycopg.Connection, job: ClaimedJob, settings: WorkerSettings, result: dict) -> bool:
+def complete_job(
+    connection: psycopg.Connection, job: ClaimedJob, settings: WorkerSettings, result: dict
+) -> str | None:
     with connection.transaction(), connection.cursor() as cursor:
         cursor.execute(
             """
@@ -190,11 +236,11 @@ def complete_job(connection: psycopg.Connection, job: ClaimedJob, settings: Work
         )
         row = cursor.fetchone()
         if row is None:
-            return False
+            return None
         outcome = row[0]
         _record_event(cursor, job, settings.worker_id, outcome)
         _audit(cursor, job, f"job.{outcome}", {"job_type": job.job_type})
-        return True
+        return outcome
 
 
 def fail_job(
@@ -204,7 +250,7 @@ def fail_job(
     error: Exception,
     *,
     retryable: bool,
-) -> bool:
+) -> str | None:
     safe_error = f"{type(error).__name__}: {error}"[:2000]
     should_retry = retryable and job.attempt_count < job.max_attempts
     delay = retry_delay_seconds(job.attempt_count, settings.retry_base_seconds, settings.retry_cap_seconds)
@@ -212,27 +258,39 @@ def fail_job(
     with connection.transaction(), connection.cursor() as cursor:
         cursor.execute(
             """
-            UPDATE jobs SET status = %s, last_error = %s,
-                available_at = CASE WHEN %s THEN now() + make_interval(secs => %s) ELSE available_at END,
-                completed_at = CASE WHEN %s THEN NULL ELSE now() END,
+            UPDATE jobs SET
+                status = CASE WHEN cancellation_requested_at IS NULL THEN %s ELSE 'cancelled' END,
+                last_error = CASE WHEN cancellation_requested_at IS NULL THEN %s ELSE last_error END,
+                available_at = CASE WHEN cancellation_requested_at IS NULL AND %s
+                    THEN now() + make_interval(secs => %s) ELSE available_at END,
+                completed_at = CASE WHEN cancellation_requested_at IS NULL AND %s THEN NULL ELSE now() END,
                 lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
             WHERE id = %s AND status = 'running' AND lease_owner = %s
-            RETURNING id
+            RETURNING status
             """,
             ("retry_wait" if should_retry else "dead_letter", safe_error, should_retry, delay,
              should_retry, job.id, settings.worker_id),
         )
-        if cursor.fetchone() is None:
-            return False
-        _record_event(cursor, job, settings.worker_id, outcome, safe_error)
-        if not should_retry:
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        persisted_status = row[0]
+        outcome = "retry" if persisted_status == "retry_wait" else persisted_status
+        event_error = safe_error if outcome != "cancelled" else None
+        _record_event(cursor, job, settings.worker_id, outcome, event_error)
+        if outcome == "dead_letter":
             cursor.execute(
                 """INSERT INTO job_dead_letters (tenant_id, job_id, final_error)
                    VALUES (%s, %s, %s) ON CONFLICT (tenant_id, job_id) DO NOTHING""",
                 (job.tenant_id, job.id, safe_error),
             )
-        _audit(cursor, job, f"job.{outcome}", {"job_type": job.job_type, "error": safe_error})
-        return True
+        audit_payload = {"job_type": job.job_type}
+        if outcome != "cancelled":
+            audit_payload["error"] = safe_error
+        _audit(cursor, job, f"job.{outcome}", audit_payload)
+    if outcome == "retry":
+        record_retry_delay(job.job_type, delay)
+    return outcome
 
 
 def execute_domain_verification(connection: psycopg.Connection, job: ClaimedJob) -> dict:
@@ -294,21 +352,38 @@ def run_once(settings: WorkerSettings) -> bool:
         job = claim_next_job(connection, settings)
         if job is None:
             return False
+        record_job_claim(job.job_type)
+        started = time.perf_counter()
+        outcome = "stale_lease"
         try:
             if job.job_type != "domain_verification":
                 raise ValueError(f"Unsupported job type: {job.job_type}")
             result = execute_domain_verification(connection, job)
-            complete_job(connection, job, settings, result)
+            persisted_outcome = complete_job(connection, job, settings, result)
+            if persisted_outcome:
+                outcome = persisted_outcome
         except Exception as error:
             retryable = isinstance(error, RetryableJobError)
-            fail_job(connection, job, settings, error, retryable=retryable)
+            persisted_outcome = fail_job(connection, job, settings, error, retryable=retryable)
+            if persisted_outcome:
+                outcome = persisted_outcome
             LOGGER.warning("Job %s failed (retryable=%s): %s", job.id, retryable, error)
+        finally:
+            record_job_outcome(job.job_type, outcome, (time.perf_counter() - started) * 1000)
         return True
 
 
 def main() -> None:
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     settings = WorkerSettings.from_environment()
+    global LOGGER
+    LOGGER = configure_logging("psychs.worker")
+    configure_worker_metrics(
+        enabled=settings.otel_enabled,
+        endpoint=settings.otel_metrics_endpoint,
+        service_name=settings.otel_service_name,
+        environment=settings.environment,
+        version=os.environ.get("PSYCHS_VERSION", "2.0.0"),
+    )
     stopping = False
 
     def request_stop(_signum, _frame) -> None:
@@ -318,10 +393,18 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     LOGGER.info("Worker %s started", settings.worker_id)
-    while not stopping:
-        if not run_once(settings):
-            time.sleep(settings.poll_seconds)
-    LOGGER.info("Worker %s stopped", settings.worker_id)
+    try:
+        while not stopping:
+            try:
+                if not run_once(settings):
+                    time.sleep(settings.poll_seconds)
+            except Exception:
+                record_worker_loop_failure()
+                LOGGER.exception("worker_loop_failed")
+                time.sleep(min(max(settings.poll_seconds, 1.0), 10.0))
+    finally:
+        LOGGER.info("Worker %s stopped", settings.worker_id)
+        shutdown_metrics()
 
 
 if __name__ == "__main__":

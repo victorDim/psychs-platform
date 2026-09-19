@@ -10,6 +10,8 @@ from uuid import uuid4
 from fastapi import Request
 from opentelemetry import trace
 
+from .metrics import record_http_request
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -23,6 +25,10 @@ class JsonFormatter(logging.Formatter):
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value
+        if record.exc_info and record.exc_info[0]:
+            # Preserve a safe diagnostic signal without exporting exception
+            # messages or tracebacks that may contain credentials or payloads.
+            payload["exception_type"] = record.exc_info[0].__name__
         span_context = trace.get_current_span().get_span_context()
         if span_context.is_valid:
             payload["trace_id"] = format(span_context.trace_id, "032x")
@@ -30,8 +36,8 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, separators=(",", ":"))
 
 
-def configure_logging() -> logging.Logger:
-    logger = logging.getLogger("psychs.api")
+def configure_logging(name: str = "psychs.api") -> logging.Logger:
+    logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(JsonFormatter())
@@ -42,6 +48,11 @@ def configure_logging() -> logging.Logger:
 
 
 logger = configure_logging()
+
+
+def _route_template(request: Request) -> str:
+    route = request.scope.get("route")
+    return getattr(route, "path", "unmatched")
 
 
 async def request_observability_middleware(request: Request, call_next):
@@ -63,6 +74,7 @@ async def request_observability_middleware(request: Request, call_next):
                 "duration_ms": duration_ms,
             },
         )
+        record_http_request(request.method, _route_template(request), 500, duration_ms)
         raise
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
@@ -76,4 +88,5 @@ async def request_observability_middleware(request: Request, call_next):
             "duration_ms": duration_ms,
         },
     )
+    record_http_request(request.method, _route_template(request), response.status_code, duration_ms)
     return response

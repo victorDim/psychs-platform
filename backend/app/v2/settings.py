@@ -25,7 +25,12 @@ class V2Settings(BaseSettings):
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
     otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")
     otel_exporter_otlp_endpoint: str = Field(default="", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
-    otel_service_name: str = Field(default="psychs-api", validation_alias="OTEL_SERVICE_NAME")
+    otel_exporter_otlp_metrics_endpoint: str = Field(
+        default="", validation_alias="OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+    )
+    otel_service_name: str = Field(
+        default="psychs-api", min_length=1, max_length=128, validation_alias="OTEL_SERVICE_NAME"
+    )
     otel_trace_sample_ratio: float = Field(default=0.1, ge=0.0, le=1.0, validation_alias="OTEL_TRACE_SAMPLE_RATIO")
 
     @property
@@ -35,6 +40,15 @@ class V2Settings(BaseSettings):
     @property
     def oidc_algorithms(self) -> list[str]:
         return [algorithm.strip() for algorithm in self.oidc_algorithms_raw.split(",") if algorithm.strip()]
+
+    @property
+    def metrics_endpoint(self) -> str:
+        if self.otel_exporter_otlp_metrics_endpoint:
+            return self.otel_exporter_otlp_metrics_endpoint
+        endpoint = self.otel_exporter_otlp_endpoint.rstrip("/")
+        if endpoint.endswith("/v1/traces"):
+            return f"{endpoint.removesuffix('/v1/traces')}/v1/metrics"
+        return f"{endpoint}/v1/metrics"
 
     @property
     def async_database_url(self) -> str:
@@ -56,6 +70,8 @@ class V2Settings(BaseSettings):
                 raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_ENABLED is true")
             if self.environment in {"staging", "production"} and not self.otel_exporter_otlp_endpoint.startswith("https://"):
                 raise ValueError("Production OTLP export must use HTTPS")
+            if self.environment in {"staging", "production"} and not self.metrics_endpoint.startswith("https://"):
+                raise ValueError("Production OTLP metrics export must use HTTPS")
 
         if self.environment in {"staging", "production"}:
             required = {

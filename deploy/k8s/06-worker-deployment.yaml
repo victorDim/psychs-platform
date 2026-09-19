@@ -8,6 +8,11 @@ metadata:
     app.kubernetes.io/part-of: psychs-geo-system
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: psychs-worker
@@ -16,6 +21,7 @@ spec:
       labels:
         app: psychs-worker
     spec:
+      terminationGracePeriodSeconds: 75
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -39,6 +45,33 @@ spec:
                 secretKeyRef:
                   name: psychs-worker-secrets
                   key: database-worker-url
+            - name: PSYCHS_ENVIRONMENT
+              value: "production"
+            - name: OTEL_SERVICE_NAME
+              value: "psychs-worker"
+            - name: OTEL_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: OTEL_ENABLED
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-observability-secrets
+                  key: otlp-endpoint
+                  optional: true
+            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-observability-secrets
+                  key: otlp-metrics-endpoint
+                  optional: true
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-observability-secrets
+                  key: otlp-headers
+                  optional: true
             - name: PSYCHS_JOB_LEASE_SECONDS
               value: "60"
             - name: PSYCHS_JOB_POLL_SECONDS
@@ -60,3 +93,14 @@ spec:
       volumes:
         - name: temporary
           emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: psychs-worker-pdb
+  namespace: psychs-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: psychs-worker

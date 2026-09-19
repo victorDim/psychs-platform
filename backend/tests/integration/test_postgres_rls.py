@@ -6,7 +6,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from app.v2.worker import WorkerSettings, claim_next_job, fail_job
+from app.v2.worker import ClaimedJob, WorkerSettings, claim_next_job, fail_job
 
 
 OWNER_URL = os.environ.get("MIGRATION_DATABASE_URL", "")
@@ -307,6 +307,43 @@ def test_worker_claim_retry_and_dead_letter_are_durable():
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction():
                     cursor.execute("DELETE FROM job_attempts WHERE job_id = %s", (job_id,))
+
+
+def test_running_job_cancellation_wins_over_retry():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, _, user, _ = _seed_two_tenants()
+    project, job_id = uuid4(), uuid4()
+    worker_id = f"cancel-worker-{job_id.hex[:8]}"
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                   VALUES (%s, %s, %s, 'Cancellation Project', 'cancel.example.com', %s)""",
+                (project, tenant, f"cancel-{project.hex[:8]}", user),
+            )
+            cursor.execute(
+                """INSERT INTO jobs
+                       (id, tenant_id, project_id, job_type, payload, idempotency_key, request_hash,
+                        created_by, status, attempt_count, lease_owner, lease_expires_at,
+                        cancellation_requested_at)
+                   VALUES (%s, %s, %s, 'domain_verification', '{}'::jsonb, %s, repeat('d', 64),
+                           %s, 'running', 1, %s, now() + interval '1 minute', now())""",
+                (job_id, tenant, project, f"idempotency-{job_id}", user, worker_id),
+            )
+
+    settings = WorkerSettings(database_url=WORKER_URL, worker_id=worker_id)
+    job = ClaimedJob(job_id, tenant, project, user, "domain_verification", {}, 1, 5)
+    with psycopg.connect(WORKER_URL) as connection:
+        outcome = fail_job(connection, job, settings, RuntimeError("transient"), retryable=True)
+        assert outcome == "cancelled"
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status, last_error FROM jobs WHERE id = %s", (job_id,))
+            assert cursor.fetchone() == ("cancelled", None)
+            cursor.execute("SELECT outcome, error FROM job_attempts WHERE job_id = %s", (job_id,))
+            assert cursor.fetchone() == ("cancelled", None)
+            cursor.execute("SELECT count(*) FROM job_dead_letters WHERE job_id = %s", (job_id,))
+            assert cursor.fetchone()[0] == 0
 
     # The table owner bypasses grants, so this separately proves the immutable
     # history trigger protects records even from privileged maintenance paths.

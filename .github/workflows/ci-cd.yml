@@ -58,7 +58,7 @@ jobs:
         run: |
           python -m compileall -q backend
           python backend/run_tests.py
-          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_v2_worker.py backend/tests/test_recovery_drill.py backend/tests/test_ci_security_enforcers.py
+          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_v2_worker.py backend/tests/test_v2_metrics.py backend/tests/test_recovery_drill.py backend/tests/test_ci_security_enforcers.py
 
       - name: Validate FastAPI Application and Offline Migration
         working-directory: backend

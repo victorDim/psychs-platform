@@ -30,6 +30,7 @@ The new `/api/v2` foundation adds:
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
 - a production control-plane UI that renders only authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;
+- low-cardinality OTLP metrics for HTTP traffic and durable-job outcomes, with an SLO and alert runbook;
 - OCI SBOM/provenance attestations, fixable high/critical image scanning, and keyless Cosign signatures;
 - CodeQL extended security analysis and full-history secret scanning before candidate images are built;
 - dependency-aware startup/readiness and structured request logs.
