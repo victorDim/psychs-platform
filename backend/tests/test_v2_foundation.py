@@ -128,6 +128,12 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "evidence_retention_events_immutable" in retention
     assert "REVOKE ALL ON FUNCTION purge_expired_evidence" in retention
 
+    collection = migrations["0008_evidence_collection.py"]
+    assert 'down_revision = "0007_evidence_retention"' in collection
+    assert "'evidence_collection'" in collection
+    assert "fk_evidence_collection_job" in collection
+    assert "uq_evidence_collection_job" in collection
+
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)
         revision = next(

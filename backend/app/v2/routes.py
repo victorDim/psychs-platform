@@ -146,7 +146,7 @@ class JobResponse(BaseModel):
 
     id: UUID
     project_id: UUID
-    job_type: Literal["domain_verification"]
+    job_type: Literal["domain_verification", "evidence_collection"]
     status: Literal["queued", "running", "retry_wait", "succeeded", "dead_letter", "cancelled"]
     priority: int
     result: Optional[dict]
@@ -235,6 +235,19 @@ class EvidenceObservationCreate(BaseModel):
         return value
 
 
+class EvidenceCollectionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    prompt: str = Field(min_length=1, max_length=8_000)
+
+    @field_validator("prompt")
+    @classmethod
+    def reject_null_characters(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("Prompt must not contain null characters")
+        return value
+
+
 class EvidenceObservationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -244,6 +257,7 @@ class EvidenceObservationResponse(BaseModel):
     provider: str
     model_identifier: str
     provider_request_id: Optional[str]
+    collection_job_id: Optional[UUID]
     prompt_text: str
     response_text: str
     citations: list[str]
@@ -624,6 +638,100 @@ async def create_evidence_observation(
 
 
 @router.post(
+    "/projects/{project_id}/evidence-collection-jobs",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def enqueue_evidence_collection_job(
+    project_id: UUID,
+    command: EvidenceCollectionCreate,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=16, max_length=255),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, human_only=True)),
+    session: AsyncSession = Depends(get_session),
+):
+    settings = get_v2_settings()
+    if not settings.evidence_collection_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Evidence collection is not enabled",
+        )
+    await _tenant_project(session, context, project_id)
+    try:
+        rate_decision = await get_rate_limiter().check(
+            context,
+            "evidence-collection",
+            limit=settings.evidence_collection_rate_limit,
+            window_seconds=settings.evidence_collection_rate_window_seconds,
+        )
+    except RateLimitUnavailable as exc:
+        record_api_protection_event("rate_limit", "unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Evidence collection is temporarily unavailable",
+        ) from exc
+    if not rate_decision.allowed:
+        record_api_protection_event("rate_limit", "rejected")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Evidence collection rate limit exceeded",
+            headers={
+                "Retry-After": str(rate_decision.retry_after_seconds),
+                "X-RateLimit-Remaining": "0",
+            },
+        )
+
+    payload = command.model_dump()
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {"project_id": str(project_id), **payload},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:evidence_collection:{idempotency_key}"},
+    )
+    existing = (
+        await session.execute(
+            select(Job).where(
+                Job.tenant_id == context.tenant_id,
+                Job.job_type == "evidence_collection",
+                Job.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="Idempotency key reused with different input")
+        return existing
+
+    job = Job(
+        tenant_id=context.tenant_id,
+        project_id=project_id,
+        job_type="evidence_collection",
+        priority=40,
+        payload=payload,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        max_attempts=3,
+        created_by=context.principal_id,
+    )
+    session.add(job)
+    await session.flush()
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="job.enqueued",
+        resource_type="job",
+        resource_id=job.id,
+        payload={"job_type": job.job_type, "project_id": str(project_id)},
+    ))
+    return job
+
+
+@router.post(
     "/projects/{project_id}/domain-verification-challenges",
     response_model=DomainVerificationChallengeResponse,
     status_code=status.HTTP_201_CREATED,
@@ -889,6 +997,8 @@ async def cancel_job(
     if job.status in {"queued", "retry_wait"}:
         job.status = "cancelled"
         job.completed_at = now
+        if job.job_type == "evidence_collection":
+            job.payload = {}
     session.add(AuditEvent(
         tenant_id=context.tenant_id,
         actor_user_id=context.principal_id,

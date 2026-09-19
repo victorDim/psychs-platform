@@ -75,6 +75,7 @@ export interface EvidenceObservation {
   provider: string;
   model_identifier: string;
   provider_request_id?: string;
+  collection_job_id?: string;
   prompt_text: string;
   response_text: string;
   citations: string[];
@@ -82,6 +83,24 @@ export interface EvidenceObservation {
   content_hash: string;
   retention_expires_at: string;
   created_at: string;
+}
+
+export interface ProductionJob {
+  id: string;
+  project_id: string;
+  job_type: 'domain_verification' | 'evidence_collection';
+  status: 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'dead_letter' | 'cancelled';
+  priority: number;
+  result?: Record<string, unknown>;
+  attempt_count: number;
+  max_attempts: number;
+  available_at: string;
+  cancellation_requested_at?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  completed_at?: string;
 }
 
 export interface EvidenceRetentionEvent {
@@ -121,6 +140,13 @@ export const v2Api = {
   listSources: (projectId: string) => request<AuthoritativeSource[]>(`/projects/${encodeURIComponent(projectId)}/sources`),
   listEvidence: (projectId: string) => request<EvidenceObservation[]>(`/projects/${encodeURIComponent(projectId)}/evidence-observations`),
   listRetentionEvents: () => request<EvidenceRetentionEvent[]>('/evidence-retention-events'),
+  enqueueEvidenceCollection: (projectId: string, prompt: string) =>
+    request<ProductionJob>(`/projects/${encodeURIComponent(projectId)}/evidence-collection-jobs`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ prompt }),
+    }),
+  getJob: (jobId: string) => request<ProductionJob>(`/jobs/${encodeURIComponent(jobId)}`),
   createDomainVerificationChallenge: (projectId: string) =>
     request<DomainVerificationChallenge>(`/projects/${encodeURIComponent(projectId)}/domain-verification-challenges`, {
       method: 'POST',

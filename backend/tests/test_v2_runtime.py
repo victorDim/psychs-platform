@@ -16,6 +16,7 @@ from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_match
 from app.v2.routes import (
     AuthoritativeSourceCreate,
     DomainVerificationResultResponse,
+    EvidenceCollectionCreate,
     EvidenceObservationCreate,
     ProjectCreate,
     TokenRevocationCreate,
@@ -183,6 +184,16 @@ def test_observed_evidence_command_rejects_unbounded_or_untrusted_provenance():
             citations=["https://user:secret@example.com/source"],
             observed_at=datetime.now(timezone.utc),
         )
+
+
+def test_evidence_collection_command_is_bounded_and_forbids_extra_fields():
+    assert EvidenceCollectionCreate(prompt="  Observe this  ").prompt == "Observe this"
+    with pytest.raises(ValidationError):
+        EvidenceCollectionCreate(prompt="x" * 8_001)
+    with pytest.raises(ValidationError):
+        EvidenceCollectionCreate(prompt="valid", provider="untrusted-client-choice")
+    with pytest.raises(ValidationError, match="null"):
+        EvidenceCollectionCreate(prompt="unsafe\x00prompt")
 
 
 @pytest.mark.parametrize(

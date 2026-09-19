@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import signal
@@ -10,7 +12,7 @@ import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.rows import dict_row
@@ -25,6 +27,12 @@ from .metrics import (
     record_worker_loop_failure,
 )
 from .observability import configure_logging
+from .provider_collection import (
+    ObservedProviderResponse,
+    ProviderPermanentError,
+    ProviderTemporaryError,
+    collect_openai_response,
+)
 from .telemetry import configure_worker_metrics, shutdown_metrics
 
 
@@ -50,6 +58,12 @@ class WorkerSettings:
     otel_service_name: str = "psychs-worker"
     retention_cleanup_interval_seconds: int = 300
     retention_cleanup_batch_size: int = 1000
+    evidence_retention_days: int = 90
+    evidence_collection_enabled: bool = False
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5"
+    openai_timeout_seconds: int = 30
+    openai_max_output_tokens: int = 2048
 
     @classmethod
     def from_environment(cls) -> "WorkerSettings":
@@ -59,6 +73,11 @@ class WorkerSettings:
         otel_enabled_raw = os.environ.get("OTEL_ENABLED", "false").strip().lower()
         if otel_enabled_raw not in {"true", "false"}:
             raise RuntimeError("OTEL_ENABLED must be true or false")
+        collection_enabled_raw = os.environ.get(
+            "PSYCHS_EVIDENCE_COLLECTION_ENABLED", "false"
+        ).strip().lower()
+        if collection_enabled_raw not in {"true", "false"}:
+            raise RuntimeError("PSYCHS_EVIDENCE_COLLECTION_ENABLED must be true or false")
         trace_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip().rstrip("/")
         metrics_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "").strip()
         if not metrics_endpoint and trace_endpoint:
@@ -84,6 +103,16 @@ class WorkerSettings:
             retention_cleanup_batch_size=int(
                 os.environ.get("PSYCHS_RETENTION_CLEANUP_BATCH_SIZE", "1000")
             ),
+            evidence_retention_days=int(
+                os.environ.get("PSYCHS_EVIDENCE_RETENTION_DAYS", "90")
+            ),
+            evidence_collection_enabled=collection_enabled_raw == "true",
+            openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
+            openai_model=os.environ.get("PSYCHS_OPENAI_MODEL", "gpt-5").strip(),
+            openai_timeout_seconds=int(os.environ.get("PSYCHS_OPENAI_TIMEOUT_SECONDS", "30")),
+            openai_max_output_tokens=int(
+                os.environ.get("PSYCHS_OPENAI_MAX_OUTPUT_TOKENS", "2048")
+            ),
         )
         if not 15 <= settings.lease_seconds <= 3600:
             raise RuntimeError("PSYCHS_JOB_LEASE_SECONDS must be between 15 and 3600")
@@ -103,6 +132,19 @@ class WorkerSettings:
             )
         if not 1 <= settings.retention_cleanup_batch_size <= 10000:
             raise RuntimeError("PSYCHS_RETENTION_CLEANUP_BATCH_SIZE must be between 1 and 10000")
+        if not 1 <= settings.evidence_retention_days <= 2555:
+            raise RuntimeError("PSYCHS_EVIDENCE_RETENTION_DAYS must be between 1 and 2555")
+        if settings.evidence_collection_enabled:
+            if not settings.openai_api_key:
+                raise RuntimeError("OPENAI_API_KEY is required when evidence collection is enabled")
+            if not settings.openai_model or len(settings.openai_model) > 128:
+                raise RuntimeError("PSYCHS_OPENAI_MODEL must contain between 1 and 128 characters")
+            if not 5 <= settings.openai_timeout_seconds <= 120:
+                raise RuntimeError("PSYCHS_OPENAI_TIMEOUT_SECONDS must be between 5 and 120")
+            if settings.openai_timeout_seconds >= settings.lease_seconds:
+                raise RuntimeError("OpenAI timeout must be shorter than the worker lease")
+            if not 64 <= settings.openai_max_output_tokens <= 8192:
+                raise RuntimeError("PSYCHS_OPENAI_MAX_OUTPUT_TOKENS must be between 64 and 8192")
         if settings.otel_enabled and not settings.otel_metrics_endpoint:
             raise RuntimeError("An OTLP endpoint is required when OTEL_ENABLED is true")
         if (
@@ -128,6 +170,14 @@ class ClaimedJob:
 
 def retry_delay_seconds(attempt_number: int, base_seconds: int, cap_seconds: int) -> int:
     return min(base_seconds * (2 ** max(attempt_number - 1, 0)), cap_seconds)
+
+
+def _safe_job_error(job: ClaimedJob, error: Exception) -> str:
+    if job.job_type != "evidence_collection":
+        return f"{type(error).__name__}: {error}"[:2000]
+    if isinstance(error, (ProviderPermanentError, RetryableJobError, ValueError)):
+        return f"{type(error).__name__}: {error}"[:2000]
+    return f"{type(error).__name__}: Evidence collection failed internally"
 
 
 def _record_event(
@@ -165,6 +215,7 @@ def _reap_exhausted_leases(connection: psycopg.Connection, worker_id: str) -> in
             cursor.execute(
                 """
                 UPDATE jobs SET status = 'dead_letter', last_error = %s, completed_at = now(),
+                    payload = CASE WHEN job_type = 'evidence_collection' THEN '{}'::jsonb ELSE payload END,
                     lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE id = %s AND status = 'running'
                 """,
@@ -205,6 +256,9 @@ def claim_next_job(connection: psycopg.Connection, settings: WorkerSettings) -> 
                     THEN now() + make_interval(secs => %s) ELSE NULL END,
                 started_at = CASE WHEN cancellation_requested_at IS NULL THEN COALESCE(started_at, now()) ELSE started_at END,
                 completed_at = CASE WHEN cancellation_requested_at IS NULL THEN NULL ELSE now() END,
+                payload = CASE
+                    WHEN cancellation_requested_at IS NOT NULL AND job_type = 'evidence_collection'
+                    THEN '{}'::jsonb ELSE payload END,
                 updated_at = now()
             FROM candidate WHERE job.id = candidate.id
             RETURNING job.*
@@ -243,6 +297,7 @@ def complete_job(
             UPDATE jobs SET
                 status = CASE WHEN cancellation_requested_at IS NULL THEN 'succeeded' ELSE 'cancelled' END,
                 result = CASE WHEN cancellation_requested_at IS NULL THEN %s ELSE NULL END,
+                payload = CASE WHEN job_type = 'evidence_collection' THEN '{}'::jsonb ELSE payload END,
                 lease_owner = NULL, lease_expires_at = NULL, completed_at = now(), updated_at = now()
             WHERE id = %s AND status = 'running' AND lease_owner = %s
             RETURNING status
@@ -266,7 +321,7 @@ def fail_job(
     *,
     retryable: bool,
 ) -> str | None:
-    safe_error = f"{type(error).__name__}: {error}"[:2000]
+    safe_error = _safe_job_error(job, error)
     should_retry = retryable and job.attempt_count < job.max_attempts
     delay = retry_delay_seconds(job.attempt_count, settings.retry_base_seconds, settings.retry_cap_seconds)
     outcome = "retry" if should_retry else "dead_letter"
@@ -279,12 +334,16 @@ def fail_job(
                 available_at = CASE WHEN cancellation_requested_at IS NULL AND %s
                     THEN now() + make_interval(secs => %s) ELSE available_at END,
                 completed_at = CASE WHEN cancellation_requested_at IS NULL AND %s THEN NULL ELSE now() END,
+                payload = CASE
+                    WHEN job_type = 'evidence_collection'
+                         AND (cancellation_requested_at IS NOT NULL OR NOT %s)
+                    THEN '{}'::jsonb ELSE payload END,
                 lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
             WHERE id = %s AND status = 'running' AND lease_owner = %s
             RETURNING status
             """,
             ("retry_wait" if should_retry else "dead_letter", safe_error, should_retry, delay,
-             should_retry, job.id, settings.worker_id),
+             should_retry, should_retry, job.id, settings.worker_id),
         )
         row = cursor.fetchone()
         if row is None:
@@ -362,6 +421,103 @@ def execute_domain_verification(connection: psycopg.Connection, job: ClaimedJob)
     return {"challenge_id": str(challenge_id), "status": "verified"}
 
 
+def execute_evidence_collection(
+    connection: psycopg.Connection,
+    job: ClaimedJob,
+    settings: WorkerSettings,
+    *,
+    collector=collect_openai_response,
+) -> dict:
+    prompt = job.payload.get("prompt")
+    if not isinstance(prompt, str) or not 1 <= len(prompt) <= 8000 or "\x00" in prompt:
+        raise ValueError("Evidence collection prompt is invalid")
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT id FROM evidence_observations WHERE collection_job_id = %s",
+            (job.id,),
+        )
+        existing = cursor.fetchone()
+    if existing:
+        return {"observation_id": str(existing[0]), "provider": "openai", "deduplicated": True}
+
+    try:
+        observed: ObservedProviderResponse = collector(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            prompt=prompt,
+            timeout_seconds=settings.openai_timeout_seconds,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+    except ProviderTemporaryError as exc:
+        raise RetryableJobError(str(exc)) from exc
+
+    observed_at = datetime.now(timezone.utc)
+    canonical_payload = {
+        "evidence_class": "observed",
+        "project_id": str(job.project_id),
+        "provider": observed.provider,
+        "model_identifier": observed.model_identifier,
+        "provider_request_id": observed.provider_request_id,
+        "prompt_text": prompt,
+        "response_text": observed.response_text,
+        "citations": list(observed.citations),
+        "observed_at": observed_at.isoformat(),
+        "collection_job_id": str(job.id),
+    }
+    content_hash = hashlib.sha256(
+        json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    observation_id = uuid4()
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO evidence_observations (
+                id, tenant_id, project_id, evidence_class, provider, model_identifier,
+                provider_request_id, prompt_text, response_text, citations, observed_at,
+                content_hash, idempotency_key, request_hash, collected_by,
+                collection_job_id, retention_expires_at
+            ) VALUES (
+                %s, %s, %s, 'observed', %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, now() + make_interval(days => %s)
+            )
+            """,
+            (
+                observation_id,
+                job.tenant_id,
+                job.project_id,
+                observed.provider,
+                observed.model_identifier,
+                observed.provider_request_id,
+                prompt,
+                observed.response_text,
+                Jsonb(list(observed.citations)),
+                observed_at,
+                content_hash,
+                f"job:{job.id}",
+                content_hash,
+                job.created_by,
+                job.id,
+                settings.evidence_retention_days,
+            ),
+        )
+        _audit(
+            cursor,
+            job,
+            "evidence_observation.created",
+            {
+                "observation_id": str(observation_id),
+                "provider": observed.provider,
+                "model_identifier": observed.model_identifier,
+                "content_hash": content_hash,
+            },
+        )
+    return {
+        "observation_id": str(observation_id),
+        "provider": observed.provider,
+        "model_identifier": observed.model_identifier,
+    }
+
+
 def run_once(settings: WorkerSettings) -> bool:
     with psycopg.connect(settings.database_url) as connection:
         job = claim_next_job(connection, settings)
@@ -371,9 +527,14 @@ def run_once(settings: WorkerSettings) -> bool:
         started = time.perf_counter()
         outcome = "stale_lease"
         try:
-            if job.job_type != "domain_verification":
+            if job.job_type == "domain_verification":
+                result = execute_domain_verification(connection, job)
+            elif job.job_type == "evidence_collection":
+                if not settings.evidence_collection_enabled:
+                    raise ValueError("Evidence collection is disabled on this worker")
+                result = execute_evidence_collection(connection, job, settings)
+            else:
                 raise ValueError(f"Unsupported job type: {job.job_type}")
-            result = execute_domain_verification(connection, job)
             persisted_outcome = complete_job(connection, job, settings, result)
             if persisted_outcome:
                 outcome = persisted_outcome
@@ -382,7 +543,12 @@ def run_once(settings: WorkerSettings) -> bool:
             persisted_outcome = fail_job(connection, job, settings, error, retryable=retryable)
             if persisted_outcome:
                 outcome = persisted_outcome
-            LOGGER.warning("Job %s failed (retryable=%s): %s", job.id, retryable, error)
+            LOGGER.warning(
+                "Job %s failed (retryable=%s): %s",
+                job.id,
+                retryable,
+                _safe_job_error(job, error),
+            )
         finally:
             record_job_outcome(job.job_type, outcome, (time.perf_counter() - started) * 1000)
         return True

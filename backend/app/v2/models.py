@@ -270,6 +270,19 @@ class EvidenceObservation(Base):
             unique=True,
             postgresql_where=text("provider_request_id IS NOT NULL"),
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "collection_job_id"],
+            ["jobs.tenant_id", "jobs.id"],
+            name="fk_evidence_collection_job",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "uq_evidence_collection_job",
+            "tenant_id",
+            "collection_job_id",
+            unique=True,
+            postgresql_where=text("collection_job_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -291,6 +304,7 @@ class EvidenceObservation(Base):
     collected_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    collection_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

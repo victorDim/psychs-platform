@@ -84,6 +84,37 @@ spec:
               value: "300"
             - name: PSYCHS_RETENTION_CLEANUP_BATCH_SIZE
               value: "1000"
+            - name: PSYCHS_EVIDENCE_RETENTION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_EVIDENCE_RETENTION_DAYS
+            - name: PSYCHS_EVIDENCE_COLLECTION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_EVIDENCE_COLLECTION_ENABLED
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-worker-secrets
+                  key: openai-api-key
+                  optional: true
+            - name: PSYCHS_OPENAI_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_OPENAI_MODEL
+            - name: PSYCHS_OPENAI_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_OPENAI_TIMEOUT_SECONDS
+            - name: PSYCHS_OPENAI_MAX_OUTPUT_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_OPENAI_MAX_OUTPUT_TOKENS
           resources:
             requests:
               cpu: "100m"

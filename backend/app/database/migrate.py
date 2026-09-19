@@ -113,7 +113,7 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
             cursor.execute(sql.SQL("GRANT SELECT ON jobs TO {}").format(sql.Identifier(role)))
             cursor.execute(
                 sql.SQL(
-                    "GRANT UPDATE (status, result, attempt_count, available_at, lease_owner, "
+                    "GRANT UPDATE (status, result, payload, attempt_count, available_at, lease_owner, "
                     "lease_expires_at, last_error, started_at, completed_at, updated_at) ON jobs TO {}"
                 ).format(sql.Identifier(role))
             )
@@ -129,6 +129,12 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
                 ).format(sql.Identifier(role))
             )
             cursor.execute(sql.SQL("GRANT INSERT ON audit_events TO {}").format(sql.Identifier(role)))
+            cursor.execute(sql.SQL("GRANT INSERT ON evidence_observations TO {}").format(sql.Identifier(role)))
+            cursor.execute(
+                sql.SQL("GRANT SELECT (id, collection_job_id) ON evidence_observations TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
             cursor.execute(
                 sql.SQL(
                     "GRANT EXECUTE ON FUNCTION purge_expired_evidence(INTEGER, VARCHAR) TO {}"

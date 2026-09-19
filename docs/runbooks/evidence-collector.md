@@ -1,10 +1,33 @@
 # Observed evidence collector contract
 
-The production control plane accepts observed AI responses only from a
-dedicated OIDC service identity. Browser users can read the resulting ledger
-but cannot label data as observed.
+The production control plane supports two real, fail-closed ingestion paths:
+the built-in durable OpenAI collection worker and an external collector using
+a dedicated OIDC service identity. Neither path creates synthetic fallback
+records. Browser users can read the resulting ledger but cannot directly label
+client-supplied data as observed.
 
-## Provisioning
+## Built-in durable collection
+
+1. Keep `PSYCHS_EVIDENCE_COLLECTION_ENABLED=false` until the staging privacy,
+   cost, and provider-identity review is complete.
+2. Store `OPENAI_API_KEY` only in the worker secret. Do not expose it to the
+   API, browser bundle, logs, or general runtime secret set.
+3. Select the operator-approved model with `PSYCHS_OPENAI_MODEL`; bound request time
+   and output with `PSYCHS_OPENAI_TIMEOUT_SECONDS` and
+   `PSYCHS_OPENAI_MAX_OUTPUT_TOKENS`.
+4. Enable the same feature gate on the API and worker. The API then accepts
+   `POST /api/v2/projects/{project_id}/evidence-collection-jobs` from authorized
+   human users, subject to the Redis-backed collection rate limit.
+
+The worker calls the Responses API with web search and `store=false`, records
+the exact returned text, model, provider response ID, and validated URL
+citations, then hashes the canonical evidence payload. Network, provider, and
+contract failures remain visible as retry or dead-letter states. No placeholder
+response is ever persisted. Once a collection job is terminal, its prompt is
+removed from the job payload; the immutable evidence copy remains governed by
+`PSYCHS_EVIDENCE_RETENTION_DAYS`.
+
+## External collector provisioning
 
 1. Create an OIDC client-credentials application for the collector. Configure
    the API audience, a unique `sub`, cryptographically random `jti` values,

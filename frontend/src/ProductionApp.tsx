@@ -5,6 +5,7 @@ import { AuthSessionControl, useAuthentication } from './auth/AuthGate';
 import { ProjectOnboarding } from './components/production/ProjectOnboarding';
 import { DomainVerificationPanel } from './components/production/DomainVerificationPanel';
 import { RetentionHistory } from './components/production/RetentionHistory';
+import { EvidenceCollectionPanel } from './components/production/EvidenceCollectionPanel';
 import {
   type AuthoritativeSource,
   type EvidenceObservation,
@@ -127,6 +128,11 @@ export const ProductionApp: React.FC = () => {
         ) : (
           <>
             {selectedProject && <DomainVerificationPanel project={selectedProject} canManage={canWriteProjects} />}
+            <EvidenceCollectionPanel
+              projectId={selectedProjectId}
+              canCollect={canWriteProjects}
+              onEvidenceUpdated={() => loadSources(selectedProjectId)}
+            />
             <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <h2 className="mb-4 font-semibold">Registered sources</h2>

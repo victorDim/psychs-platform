@@ -30,6 +30,7 @@ The new `/api/v2` foundation adds:
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
 - a service-identity-only observed-evidence ingestion API with idempotency, provenance hashes, immutable tenant-RLS storage, and a non-synthetic production UI;
 - bounded, lock-safe evidence expiry with least-privilege worker execution and append-only tenant-visible retention receipts;
+- optional real OpenAI web-search evidence collection through a rate-limited durable job, with worker-only credentials, provider provenance, `store=false`, prompt minimization, and no synthetic fallback;
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
 - a production control-plane UI for real tenant project onboarding, authoritative sources, observed evidence, and retention receipts, backed only by authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;

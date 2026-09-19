@@ -47,6 +47,15 @@ class V2Settings(BaseSettings):
     evidence_ingest_rate_window_seconds: int = Field(
         default=60, ge=1, le=3600, validation_alias="PSYCHS_EVIDENCE_INGEST_RATE_WINDOW_SECONDS"
     )
+    evidence_collection_enabled: bool = Field(
+        default=False, validation_alias="PSYCHS_EVIDENCE_COLLECTION_ENABLED"
+    )
+    evidence_collection_rate_limit: int = Field(
+        default=10, ge=1, le=1000, validation_alias="PSYCHS_EVIDENCE_COLLECTION_RATE_LIMIT"
+    )
+    evidence_collection_rate_window_seconds: int = Field(
+        default=3600, ge=60, le=86400, validation_alias="PSYCHS_EVIDENCE_COLLECTION_RATE_WINDOW_SECONDS"
+    )
     database_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DATABASE_POOL_SIZE")
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
     otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")

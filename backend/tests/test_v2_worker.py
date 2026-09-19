@@ -2,7 +2,8 @@
 
 import pytest
 
-from app.v2.worker import WorkerSettings, retry_delay_seconds
+from app.v2.worker import ClaimedJob, WorkerSettings, _safe_job_error, retry_delay_seconds
+from uuid import uuid4
 
 
 def test_retry_delay_is_exponential_and_capped():
@@ -34,3 +35,35 @@ def test_worker_rejects_aggressive_retention_interval(monkeypatch):
     monkeypatch.setenv("PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS", "59")
     with pytest.raises(RuntimeError, match="CLEANUP_INTERVAL_SECONDS"):
         WorkerSettings.from_environment()
+
+
+def test_worker_requires_provider_key_when_collection_is_enabled(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_EVIDENCE_COLLECTION_ENABLED", "true")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        WorkerSettings.from_environment()
+
+
+def test_worker_rejects_retention_outside_policy(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_EVIDENCE_RETENTION_DAYS", "0")
+    with pytest.raises(RuntimeError, match="EVIDENCE_RETENTION_DAYS"):
+        WorkerSettings.from_environment()
+
+
+def test_collection_errors_do_not_expose_database_exception_details():
+    identifier = uuid4()
+    job = ClaimedJob(
+        identifier,
+        identifier,
+        identifier,
+        identifier,
+        "evidence_collection",
+        {"prompt": "customer secret"},
+        1,
+        3,
+    )
+    sanitized = _safe_job_error(job, RuntimeError("failed row contains customer secret"))
+    assert sanitized == "RuntimeError: Evidence collection failed internally"
+    assert "customer secret" not in sanitized

@@ -7,7 +7,14 @@ import psycopg
 import pytest
 
 from app.database.bootstrap_tenant import BootstrapSettings, bootstrap_tenant
-from app.v2.worker import ClaimedJob, WorkerSettings, claim_next_job, fail_job
+from app.v2.provider_collection import ObservedProviderResponse
+from app.v2.worker import (
+    ClaimedJob,
+    WorkerSettings,
+    claim_next_job,
+    execute_evidence_collection,
+    fail_job,
+)
 
 
 OWNER_URL = os.environ.get("MIGRATION_DATABASE_URL", "")
@@ -542,3 +549,79 @@ def test_running_job_cancellation_wins_over_retry():
             with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
                 with connection.transaction():
                     cursor.execute("DELETE FROM job_attempts WHERE job_id = %s", (job_id,))
+
+
+def test_worker_collects_real_evidence_once_per_durable_job():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, _, user, _ = _seed_two_tenants()
+    project, job_id = uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                   VALUES (%s, %s, %s, 'Evidence Project', 'evidence.example.com', %s)""",
+                (project, tenant, f"evidence-{project.hex[:8]}", user),
+            )
+            cursor.execute(
+                """INSERT INTO jobs
+                       (id, tenant_id, project_id, job_type, payload, idempotency_key,
+                        request_hash, created_by, max_attempts)
+                   VALUES (%s, %s, %s, 'evidence_collection',
+                           jsonb_build_object('prompt', 'What does Example make?'),
+                           %s, repeat('e', 64), %s, 3)""",
+                (job_id, tenant, project, f"idempotency-{job_id}", user),
+            )
+
+    job = ClaimedJob(
+        job_id,
+        tenant,
+        project,
+        user,
+        "evidence_collection",
+        {"prompt": "What does Example make?"},
+        1,
+        3,
+    )
+    settings = WorkerSettings(
+        database_url=WORKER_URL,
+        worker_id=f"evidence-worker-{job_id.hex[:8]}",
+        evidence_collection_enabled=True,
+        openai_api_key="not-used-by-test-collector",
+        evidence_retention_days=30,
+    )
+    calls = 0
+
+    def observed_collector(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return ObservedProviderResponse(
+            provider="openai",
+            model_identifier="gpt-5-test",
+            provider_request_id=f"resp-{job_id}",
+            response_text="An observed response from the injected provider boundary.",
+            citations=("https://example.com/source",),
+        )
+
+    with psycopg.connect(WORKER_URL) as connection:
+        first = execute_evidence_collection(connection, job, settings, collector=observed_collector)
+        repeated = execute_evidence_collection(connection, job, settings, collector=observed_collector)
+
+    assert calls == 1
+    assert repeated["observation_id"] == first["observation_id"]
+    assert repeated["deduplicated"] is True
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT collection_job_id, provider, model_identifier, response_text,
+                          retention_expires_at > now() + interval '29 days'
+                   FROM evidence_observations WHERE id = %s""",
+                (first["observation_id"],),
+            )
+            assert cursor.fetchone() == (
+                job_id,
+                "openai",
+                "gpt-5-test",
+                "An observed response from the injected provider boundary.",
+                True,
+            )
