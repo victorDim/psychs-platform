@@ -184,6 +184,38 @@ def test_audit_events_are_append_only_for_application_role():
                     cursor.execute("DELETE FROM audit_events WHERE id = %s", (event_id,))
 
 
+def test_active_token_revocations_are_tenant_scoped_and_immutable():
+    tenant_a, tenant_b, user_a, _ = _seed_two_tenants()
+    revocation_id = uuid4()
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute(
+                """
+                INSERT INTO revoked_access_tokens
+                    (id, tenant_id, token_hash, expires_at, reason, revoked_by)
+                VALUES (%s, %s, repeat('e', 64), now() + interval '15 minutes', 'integration test', %s)
+                """,
+                (revocation_id, tenant_a, user_a),
+            )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    _set_tenant(cursor, tenant_a)
+                    cursor.execute("DELETE FROM revoked_access_tokens WHERE id = %s", (revocation_id,))
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_b)
+            cursor.execute("SELECT id FROM revoked_access_tokens WHERE id = %s", (revocation_id,))
+            assert cursor.fetchone() is None
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.RaiseException, match="active revoked access tokens are immutable"):
+                with connection.transaction():
+                    cursor.execute("DELETE FROM revoked_access_tokens WHERE id = %s", (revocation_id,))
+
+
 def test_jobs_are_tenant_isolated_and_worker_can_claim_across_tenants():
     if not WORKER_URL:
         pytest.skip("Worker PostgreSQL URL is not configured")

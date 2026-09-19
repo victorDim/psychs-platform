@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
 from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_matches
-from app.v2.routes import AuthoritativeSourceCreate, ProjectCreate
+from app.v2.routes import AuthoritativeSourceCreate, ProjectCreate, TokenRevocationCreate
 from app.v2.settings import V2Settings
 
 
@@ -29,7 +29,7 @@ class _StaticJwksClient:
         return _SigningKey(self.public_key)
 
 
-def _oidc_fixture():
+def _oidc_fixture(**setting_overrides):
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     settings = V2Settings(
         _env_file=None,
@@ -38,6 +38,7 @@ def _oidc_fixture():
         PSYCHS_OIDC_AUDIENCE="psychs-api",
         PSYCHS_OIDC_JWKS_URL="https://identity.example.test/.well-known/jwks.json",
         PSYCHS_OIDC_ALGORITHMS="RS256",
+        **setting_overrides,
     )
     authenticator = OIDCAuthenticator(settings)
     authenticator._jwks = _StaticJwksClient(private_key.public_key())
@@ -54,6 +55,9 @@ def _token(private_key, **overrides):
         "aud": "psychs-api",
         "iat": now,
         "exp": now + timedelta(minutes=5),
+        "jti": f"token-{uuid4()}",
+        "auth_time": int(now.timestamp()),
+        "amr": ["pwd", "mfa"],
     }
     claims.update(overrides)
     return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test-key"})
@@ -62,6 +66,21 @@ def _token(private_key, **overrides):
 def test_production_settings_fail_closed_when_incomplete():
     with pytest.raises(ValidationError):
         V2Settings(_env_file=None, PSYCHS_ENVIRONMENT="production")
+
+
+def test_production_settings_require_revocable_tokens():
+    with pytest.raises(ValidationError, match="PSYCHS_OIDC_REQUIRE_JTI"):
+        V2Settings(
+            _env_file=None,
+            PSYCHS_ENVIRONMENT="production",
+            PSYCHS_V2_ENABLED=True,
+            DATABASE_URL="postgresql://app:secret@example.test/psychs",
+            REDIS_URL="rediss://example.test/0",
+            PSYCHS_CORS_ALLOWED_ORIGINS="https://app.example.test",
+            PSYCHS_OIDC_ISSUER="https://identity.example.test/",
+            PSYCHS_OIDC_AUDIENCE="psychs-api",
+            PSYCHS_OIDC_JWKS_URL="https://identity.example.test/jwks",
+        )
 
 
 def test_telemetry_configuration_fails_closed_and_requires_tls_in_production():
@@ -102,6 +121,17 @@ def test_project_command_forbids_tenant_selection_and_non_domain_urls():
 
     command = ProjectCreate(name="Valid", slug="valid-project", canonical_domain="https://Example.com/")
     assert command.canonical_domain == "example.com"
+
+
+def test_token_revocation_command_requires_timezone_and_bounded_identifier():
+    with pytest.raises(ValidationError, match="timezone"):
+        TokenRevocationCreate(token_id="token-identifier", expires_at=datetime.now(), reason="security response")
+    with pytest.raises(ValidationError):
+        TokenRevocationCreate(
+            token_id="short",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            reason="security response",
+        )
 
 
 @pytest.mark.parametrize(
@@ -226,3 +256,24 @@ def test_oidc_rejects_token_signed_by_another_key():
     attacker_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     with pytest.raises(AuthenticationError):
         authenticator.verify(_token(attacker_key))
+
+
+def test_oidc_enforces_jti_lifetime_and_service_principal_type():
+    private_key, authenticator = _oidc_fixture(PSYCHS_OIDC_REQUIRE_JTI=True)
+    identity = authenticator.verify(_token(private_key, gty="client-credentials", auth_time=None, amr=["MFA"]))
+    assert identity.principal_type == "service"
+    assert identity.token_id
+    assert identity.amr == frozenset({"mfa"})
+
+    with pytest.raises(AuthenticationError, match="identifier"):
+        authenticator.verify(_token(private_key, jti=""))
+    with pytest.raises(AuthenticationError, match="lifetime"):
+        authenticator.verify(_token(private_key, exp=datetime.now(timezone.utc) + timedelta(hours=2)))
+    with pytest.raises(AuthenticationError, match="principal type"):
+        authenticator.verify(_token(private_key, principal_type="robot"))
+    with pytest.raises(AuthenticationError, match="conflicts"):
+        authenticator.verify(_token(private_key, principal_type="human", gty="client-credentials"))
+    with pytest.raises(AuthenticationError, match="scope claim"):
+        authenticator.verify(_token(private_key, scope={"projects:write": True}))
+    with pytest.raises(AuthenticationError, match="authentication-method"):
+        authenticator.verify(_token(private_key, amr={"mfa": True}))

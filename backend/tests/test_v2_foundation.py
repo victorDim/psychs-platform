@@ -1,11 +1,13 @@
 """Dependency-free tests for v2 context, policy, and migration invariants."""
 
 import ast
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.v2.context import RequestContext
+from app.v2.dependencies import _has_recent_step_up
 from app.v2.policy import VIEW_PROJECTS, WRITE_PROJECTS, authorize
 
 
@@ -18,6 +20,12 @@ def _context(role: str, scopes=frozenset({VIEW_PROJECTS, WRITE_PROJECTS})) -> Re
         membership_id=uuid4(),
         role=role,
         scopes=frozenset(scopes),
+        principal_type="human",
+        token_id="test-token-id",
+        token_expires_at=datetime.now(timezone.utc),
+        auth_time=datetime.now(timezone.utc),
+        acr=None,
+        amr=frozenset({"mfa"}),
     )
 
 
@@ -35,6 +43,14 @@ def test_v2_policy_requires_role_and_scope():
     assert authorize(_context("viewer"), WRITE_PROJECTS).reason == "role_missing_permission"
     assert authorize(_context("analyst", {VIEW_PROJECTS}), WRITE_PROJECTS).reason == "token_missing_scope"
     assert authorize(_context("unknown-role"), VIEW_PROJECTS).allowed is False
+    assert _has_recent_step_up(_context("analyst")) is True
+
+
+def test_step_up_rejects_service_stale_and_unverified_authentication():
+    context = _context("admin")
+    assert _has_recent_step_up(replace(context, principal_type="service")) is False
+    assert _has_recent_step_up(replace(context, auth_time=datetime.now(timezone.utc) - timedelta(hours=1))) is False
+    assert _has_recent_step_up(replace(context, acr=None, amr=frozenset({"pwd"}))) is False
 
 
 def test_v2_migration_forces_rls_with_write_checks():
@@ -68,6 +84,13 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "uq_jobs_idempotency" in jobs
     assert "uq_job_attempt_event" in jobs
     assert "prevent_job_history_mutation" in jobs
+
+    identity = migrations["0005_identity_assurance.py"]
+    assert 'down_revision = "0004_durable_jobs"' in identity
+    assert "principal_type IN ('human', 'service')" in identity
+    assert "revoked_access_tokens_tenant_isolation" in identity
+    assert "revoked_access_tokens_immutability" in identity
+    assert "OLD.expires_at > clock_timestamp() - interval '30 seconds'" in identity
 
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)

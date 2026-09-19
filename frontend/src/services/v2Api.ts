@@ -1,4 +1,9 @@
-import { AuthenticationRequiredError, getAccessToken, getUserManager } from '../auth/oidc';
+import {
+  AuthenticationRequiredError,
+  getAccessToken,
+  getUserManager,
+  StepUpAuthenticationRequiredError,
+} from '../auth/oidc';
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
 const BASE_URL = (configuredBaseUrl || '/api/v2').replace(/\/$/, '');
@@ -28,6 +33,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null);
+    if (response.status === 403 && body?.detail === 'step_up_authentication_required') {
+      throw new StepUpAuthenticationRequiredError();
+    }
     throw new ApiError(response.status, body?.detail || `Request failed with status ${response.status}`);
   }
   return response.json() as Promise<T>;

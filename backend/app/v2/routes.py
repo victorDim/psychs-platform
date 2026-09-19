@@ -27,8 +27,10 @@ from .models import (
     IdempotencyRecord,
     Job,
     Project,
+    RevokedAccessToken,
 )
-from .policy import VIEW_PROJECTS, WRITE_PROJECTS
+from .policy import MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJECTS
+from .settings import get_v2_settings
 from .repositories import ProjectRepository
 
 
@@ -153,6 +155,30 @@ class JobResponse(BaseModel):
     updated_at: datetime
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
+
+
+class TokenRevocationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    token_id: str = Field(min_length=8, max_length=255)
+    expires_at: datetime
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("expires_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("expires_at must include a timezone")
+        return value
+
+
+class TokenRevocationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    expires_at: datetime
+    reason: str
+    created_at: datetime
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
@@ -352,7 +378,7 @@ async def create_authoritative_source(
 )
 async def create_domain_verification_challenge(
     project_id: UUID,
-    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, step_up=True, human_only=True)),
     session: AsyncSession = Depends(get_session),
 ):
     project = await _tenant_project(session, context, project_id)
@@ -407,7 +433,7 @@ async def create_domain_verification_challenge(
 async def verify_domain_verification_challenge(
     project_id: UUID,
     challenge_id: UUID,
-    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, step_up=True, human_only=True)),
     session: AsyncSession = Depends(get_session),
 ):
     project = await _tenant_project(session, context, project_id)
@@ -500,7 +526,7 @@ async def enqueue_domain_verification_job(
     project_id: UUID,
     challenge_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=16, max_length=255),
-    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, step_up=True, human_only=True)),
     session: AsyncSession = Depends(get_session),
 ):
     await _tenant_project(session, context, project_id)
@@ -621,3 +647,56 @@ async def cancel_job(
         payload={"job_type": job.job_type, "previous_status": previous_status},
     ))
     return job
+
+
+@router.post(
+    "/security/revoked-tokens",
+    response_model=TokenRevocationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def revoke_access_token(
+    command: TokenRevocationCreate,
+    context: RequestContext = Depends(require_permission(MANAGE_SECURITY, step_up=True, human_only=True)),
+    session: AsyncSession = Depends(get_session),
+):
+    now = datetime.now(timezone.utc)
+    expires_at = command.expires_at.astimezone(timezone.utc)
+    max_expiry = now + timedelta(seconds=get_v2_settings().oidc_max_token_lifetime_seconds + 30)
+    if expires_at <= now or expires_at > max_expiry:
+        raise HTTPException(status_code=422, detail="Revocation expiry must match a currently valid access token")
+    token_hash = hashlib.sha256(command.token_id.encode("utf-8")).hexdigest()
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:revoked-token:{token_hash}"},
+    )
+    existing = (
+        await session.execute(
+            select(RevokedAccessToken).where(
+                RevokedAccessToken.tenant_id == context.tenant_id,
+                RevokedAccessToken.token_hash == token_hash,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.expires_at < expires_at:
+            raise HTTPException(status_code=409, detail="Token identifier reuse detected")
+        return existing
+    revocation = RevokedAccessToken(
+        tenant_id=context.tenant_id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+        reason=command.reason,
+        revoked_by=context.principal_id,
+    )
+    session.add(revocation)
+    await session.flush()
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="access_token.revoked",
+        resource_type="revoked_access_token",
+        resource_id=revocation.id,
+        payload={"expires_at": expires_at.isoformat(), "reason": command.reason},
+    ))
+    return revocation

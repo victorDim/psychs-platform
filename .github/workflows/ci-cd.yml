@@ -275,6 +275,7 @@ jobs:
             VITE_OIDC_CLIENT_ID=${{ vars.VITE_OIDC_CLIENT_ID }}
             VITE_OIDC_AUDIENCE=${{ vars.VITE_OIDC_AUDIENCE }}
             VITE_OIDC_SCOPE=${{ vars.VITE_OIDC_SCOPE }}
+            VITE_OIDC_STEP_UP_ACR_VALUES=${{ vars.VITE_OIDC_STEP_UP_ACR_VALUES }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly VITE_OIDC_CLIENT_ID?: string
   readonly VITE_OIDC_AUDIENCE?: string
   readonly VITE_OIDC_SCOPE?: string
+  readonly VITE_OIDC_STEP_UP_ACR_VALUES?: string
   readonly VITE_ENABLE_LEGACY_DEMO_UI?: string
 }
 

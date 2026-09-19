@@ -7,6 +7,13 @@ export class AuthenticationRequiredError extends Error {
   }
 }
 
+export class StepUpAuthenticationRequiredError extends Error {
+  constructor(message = 'Additional authentication is required for this action') {
+    super(message);
+    this.name = 'StepUpAuthenticationRequiredError';
+  }
+}
+
 let manager: UserManager | undefined;
 
 function requiredEnvironmentValue(name: string, value: string | undefined): string {
@@ -62,4 +69,15 @@ export async function getAccessToken(): Promise<string> {
   const user = await getUserManager().getUser();
   if (!user || user.expired || !user.access_token) throw new AuthenticationRequiredError();
   return user.access_token;
+}
+
+export async function requestStepUpAuthentication(): Promise<void> {
+  const acrValues = import.meta.env.VITE_OIDC_STEP_UP_ACR_VALUES?.trim();
+  await getUserManager().signinRedirect({
+    extraQueryParams: {
+      prompt: 'login',
+      max_age: 0,
+      ...(acrValues ? { acr_values: acrValues } : {}),
+    },
+  });
 }

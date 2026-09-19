@@ -21,6 +21,17 @@ class V2Settings(BaseSettings):
     oidc_audience: str = Field(default="", validation_alias="PSYCHS_OIDC_AUDIENCE")
     oidc_jwks_url: str = Field(default="", validation_alias="PSYCHS_OIDC_JWKS_URL")
     oidc_algorithms_raw: str = Field(default="RS256", validation_alias="PSYCHS_OIDC_ALGORITHMS")
+    oidc_require_jti: bool = Field(default=False, validation_alias="PSYCHS_OIDC_REQUIRE_JTI")
+    oidc_max_token_lifetime_seconds: int = Field(
+        default=900, ge=60, le=3600, validation_alias="PSYCHS_OIDC_MAX_TOKEN_LIFETIME_SECONDS"
+    )
+    oidc_step_up_max_age_seconds: int = Field(
+        default=900, ge=60, le=3600, validation_alias="PSYCHS_OIDC_STEP_UP_MAX_AGE_SECONDS"
+    )
+    oidc_step_up_acr_values_raw: str = Field(default="", validation_alias="PSYCHS_OIDC_STEP_UP_ACR_VALUES")
+    oidc_step_up_amr_values_raw: str = Field(
+        default="mfa,otp,hwk", validation_alias="PSYCHS_OIDC_STEP_UP_AMR_VALUES"
+    )
     database_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DATABASE_POOL_SIZE")
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
     otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")
@@ -40,6 +51,14 @@ class V2Settings(BaseSettings):
     @property
     def oidc_algorithms(self) -> list[str]:
         return [algorithm.strip() for algorithm in self.oidc_algorithms_raw.split(",") if algorithm.strip()]
+
+    @property
+    def oidc_step_up_acr_values(self) -> frozenset[str]:
+        return frozenset(value.strip() for value in self.oidc_step_up_acr_values_raw.split(",") if value.strip())
+
+    @property
+    def oidc_step_up_amr_values(self) -> frozenset[str]:
+        return frozenset(value.strip().lower() for value in self.oidc_step_up_amr_values_raw.split(",") if value.strip())
 
     @property
     def metrics_endpoint(self) -> str:
@@ -90,6 +109,10 @@ class V2Settings(BaseSettings):
                 raise ValueError("Production DATABASE_URL must use PostgreSQL")
             if not self.oidc_issuer.startswith("https://") or not self.oidc_jwks_url.startswith("https://"):
                 raise ValueError("Production OIDC issuer and JWKS URL must use HTTPS")
+            if not self.oidc_require_jti:
+                raise ValueError("PSYCHS_OIDC_REQUIRE_JTI must be true in staging and production")
+            if not self.oidc_step_up_acr_values and not self.oidc_step_up_amr_values:
+                raise ValueError("At least one OIDC step-up ACR or AMR value is required")
         return self
 
 

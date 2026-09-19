@@ -35,6 +35,7 @@ TABLES = (
     "jobs",
     "job_attempts",
     "job_dead_letters",
+    "revoked_access_tokens",
 )
 RLS_TABLES = TABLES
 TARGET_SUFFIX = "_restore_drill"

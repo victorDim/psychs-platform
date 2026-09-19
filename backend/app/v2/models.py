@@ -31,6 +31,7 @@ class User(Base):
     external_subject: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(320))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    principal_type: Mapped[str] = mapped_column(String(16), nullable=False, default="human")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -226,3 +227,23 @@ class JobDeadLetter(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     final_error: Mapped[str] = mapped_column(String(2000), nullable=False)
     failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RevokedAccessToken(Base):
+    __tablename__ = "revoked_access_tokens"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "token_hash", name="uq_revoked_token_tenant_hash"),
+        Index("ix_revoked_tokens_expiry", "tenant_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    revoked_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

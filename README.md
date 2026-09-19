@@ -19,6 +19,7 @@ The software now fails closed by default:
 The new `/api/v2` foundation adds:
 
 - asymmetric OIDC/JWKS token verification;
+- bounded token lifetimes, mandatory token IDs, tenant-scoped revocation, human/service principal separation, and step-up enforcement for domain ownership;
 - database-confirmed tenant membership and immutable request context;
 - centralized role-and-scope authorization;
 - SQLAlchemy repositories with transaction-local tenant identity;
@@ -61,7 +62,10 @@ simulation UI is available only from the Vite development server when
 `VITE_ENABLE_LEGACY_DEMO_UI=true`; production builds exclude that path and its
 synthetic fixtures. Configure the identity provider with exact callback and
 post-logout URLs, refresh-token rotation for the public client, and access-token
-claims for `sub`, `tenant_id`, `aud`, and the requested `scope` values.
+claims for `sub`, `tenant_id`, `aud`, `jti`, `iat`, `exp`, and the requested
+`scope` values. Sensitive human operations additionally require recent
+`auth_time` and an accepted `acr` or `amr` value. Validate the complete provider
+contract with [the OIDC staging runbook](docs/runbooks/oidc-staging-validation.md).
 
 ## Local development API
 
@@ -94,9 +98,9 @@ Before starting Compose, generate separate strong values for `POSTGRES_PASSWORD`
 Before production promotion, all of the following are mandatory:
 
 1. Migrate remaining in-memory/class-level domain state to tenant-scoped PostgreSQL repositories and Redis-backed coordination.
-2. Exercise the selected OIDC provider in staging, including service identities, revocation, and step-up authentication.
-3. Add idempotent background jobs, retry policy, and dead-letter handling; continue scheduled restore drills using [the PostgreSQL recovery runbook](docs/runbooks/postgres-recovery.md).
-4. Add actionable metrics, SLOs, dashboards, and alert runbooks on top of the existing structured logs, request IDs, and OpenTelemetry traces.
+2. Exercise the selected OIDC provider in staging, including service identities, revocation, key rotation, and step-up authentication, using [the identity runbook](docs/runbooks/oidc-staging-validation.md).
+3. Continue scheduled restore drills using [the PostgreSQL recovery runbook](docs/runbooks/postgres-recovery.md), and load/chaos test durable job retry and dead-letter behavior.
+4. Connect the existing metrics and traces to production dashboards/paging, then validate the alert paths with [the SLO runbook](docs/runbooks/slo-alerts.md).
 5. Keep CodeQL, full-history secret scanning, dependency locks, SBOMs, signed images, provenance attestations, and container scanning green; triage security alerts before promotion.
 6. Exercise staging smoke tests, rollback, disaster recovery, load tests, and a third-party penetration test.
 7. Confirm that every customer-visible metric distinguishes observed, inferred, and synthetic evidence.

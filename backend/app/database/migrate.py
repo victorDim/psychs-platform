@@ -86,6 +86,9 @@ def provision_application_role(owner_url: str, role: str, password: str) -> None
             cursor.execute(
                 sql.SQL("GRANT SELECT ON job_attempts, job_dead_letters TO {}").format(sql.Identifier(role))
             )
+            cursor.execute(
+                sql.SQL("GRANT SELECT, INSERT ON revoked_access_tokens TO {}").format(sql.Identifier(role))
+            )
 
 
 def provision_worker_role(owner_url: str, role: str, password: str) -> None:
