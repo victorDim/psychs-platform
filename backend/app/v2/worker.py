@@ -18,7 +18,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .domain_verification import DnsVerificationUnavailable, dns_txt_matches
+from .domain_verification import DnsVerificationUnavailable, dns_txt_matches, source_belongs_to_domain
 from .metrics import (
     record_evidence_retention,
     record_job_claim,
@@ -412,12 +412,41 @@ def execute_domain_verification(connection: psycopg.Connection, job: ClaimedJob)
 
     with connection.transaction(), connection.cursor() as cursor:
         cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{job.tenant_id}:{job.project_id}:domain-verification",),
+        )
+        cursor.execute(
             """UPDATE domain_verification_challenges
                SET status = 'verified', verified_at = now(), last_checked_at = now(),
                    attempt_count = attempt_count + 1
                WHERE id = %s AND status = 'pending'""",
             (challenge_id,),
         )
+        cursor.execute(
+            """UPDATE projects
+               SET domain_verification_status = 'verified', domain_verified_at = now(),
+                   updated_at = now()
+               WHERE id = %s AND tenant_id = %s""",
+            (job.project_id, job.tenant_id),
+        )
+        cursor.execute(
+            """SELECT id, canonical_url FROM authoritative_sources
+               WHERE tenant_id = %s AND project_id = %s
+                 AND verification_status != 'verified'""",
+            (job.tenant_id, job.project_id),
+        )
+        verified_source_ids = [
+            source_id
+            for source_id, canonical_url in cursor.fetchall()
+            if source_belongs_to_domain(canonical_url, challenge["canonical_domain"])
+        ]
+        if verified_source_ids:
+            cursor.execute(
+                """UPDATE authoritative_sources
+                   SET verification_status = 'verified', updated_at = now()
+                   WHERE tenant_id = %s AND project_id = %s AND id = ANY(%s::uuid[])""",
+                (job.tenant_id, job.project_id, verified_source_ids),
+            )
     return {"challenge_id": str(challenge_id), "status": "verified"}
 
 

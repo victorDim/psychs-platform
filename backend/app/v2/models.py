@@ -61,6 +61,10 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     canonical_domain: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    domain_verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unverified"
+    )
+    domain_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

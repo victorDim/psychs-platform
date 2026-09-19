@@ -74,6 +74,14 @@ export const ProductionApp: React.FC = () => {
 
   useEffect(() => { void loadSources(selectedProjectId); }, [loadSources, selectedProjectId]);
 
+  const refreshVerifiedProject = useCallback(async (projectId: string) => {
+    const [projectRecords] = await Promise.all([
+      v2Api.listProjects(),
+      loadSources(projectId),
+    ]);
+    setProjects(projectRecords);
+  }, [loadSources]);
+
   const addSource = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!selectedProjectId) return;
@@ -127,7 +135,11 @@ export const ProductionApp: React.FC = () => {
           )
         ) : (
           <>
-            {selectedProject && <DomainVerificationPanel project={selectedProject} canManage={canWriteProjects} />}
+            {selectedProject && <DomainVerificationPanel
+              project={selectedProject}
+              canManage={canWriteProjects}
+              onVerified={() => refreshVerifiedProject(selectedProject.id)}
+            />}
             <EvidenceCollectionPanel
               projectId={selectedProjectId}
               canCollect={canWriteProjects}

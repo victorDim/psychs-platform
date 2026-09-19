@@ -134,6 +134,12 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "fk_evidence_collection_job" in collection
     assert "uq_evidence_collection_job" in collection
 
+    domain_trust = migrations["0009_persistent_domain_trust.py"]
+    assert 'down_revision = "0008_evidence_collection"' in domain_trust
+    assert "domain_verification_status" in domain_trust
+    assert "domain_verified_at" in domain_trust
+    assert "latest_verified_at" in domain_trust
+
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)
         revision = next(

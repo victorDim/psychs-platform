@@ -19,7 +19,7 @@ from app.ingestion.ssrf_guard import validate_public_url_syntax
 from .context import RequestContext
 from .database import get_session
 from .dependencies import require_permission
-from .domain_verification import DnsVerificationUnavailable, dns_txt_matches
+from .domain_verification import DnsVerificationUnavailable, dns_txt_matches, source_belongs_to_domain
 from .models import (
     AuditEvent,
     AuthoritativeSource,
@@ -71,6 +71,8 @@ class ProjectResponse(BaseModel):
     name: str
     canonical_domain: str
     description: Optional[str]
+    domain_verification_status: Literal["unverified", "verified"]
+    domain_verified_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
 
@@ -392,7 +394,11 @@ async def create_authoritative_source(
     context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
     session: AsyncSession = Depends(get_session),
 ):
-    await _tenant_project(session, context, project_id)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:{project_id}:domain-verification"},
+    )
+    project = await _tenant_project(session, context, project_id)
     endpoint = f"POST:/api/v2/projects/{project_id}/sources"
     canonical_payload = json.dumps(command.model_dump(), sort_keys=True, separators=(",", ":"))
     request_hash = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
@@ -444,7 +450,12 @@ async def create_authoritative_source(
         tenant_id=context.tenant_id,
         project_id=project_id,
         created_by=context.principal_id,
-        verification_status="unverified",
+        verification_status=(
+            "verified"
+            if project.domain_verification_status == "verified"
+            and source_belongs_to_domain(command.canonical_url, project.canonical_domain)
+            else "unverified"
+        ),
         **command.model_dump(),
     )
     session.add(source)
@@ -463,7 +474,11 @@ async def create_authoritative_source(
         action="authoritative_source.created",
         resource_type="authoritative_source",
         resource_id=source.id,
-        payload={"project_id": str(project_id), "canonical_url": source.canonical_url},
+        payload={
+            "project_id": str(project_id),
+            "canonical_url": source.canonical_url,
+            "verification_status": source.verification_status,
+        },
     ))
     return source
 
@@ -857,12 +872,26 @@ async def verify_domain_verification_challenge(
     locked_challenge.last_checked_at = checked_at
     locked_challenge.attempt_count += 1
     action = "domain_verification.checked"
+    promoted_source_count = 0
     if locked_challenge.expires_at <= checked_at:
         locked_challenge.status = "expired"
         action = "domain_verification.expired"
     elif matched:
         locked_challenge.status = "verified"
         locked_challenge.verified_at = checked_at
+        project.domain_verification_status = "verified"
+        project.domain_verified_at = checked_at
+        source_result = await session.execute(
+            select(AuthoritativeSource).where(
+                AuthoritativeSource.tenant_id == context.tenant_id,
+                AuthoritativeSource.project_id == project_id,
+                AuthoritativeSource.verification_status != "verified",
+            )
+        )
+        for source in source_result.scalars().all():
+            if source_belongs_to_domain(source.canonical_url, project.canonical_domain):
+                source.verification_status = "verified"
+                promoted_source_count += 1
         action = "domain_verification.verified"
 
     session.add(AuditEvent(
@@ -872,7 +901,11 @@ async def verify_domain_verification_challenge(
         action=action,
         resource_type="domain_verification_challenge",
         resource_id=locked_challenge.id,
-        payload={"project_id": str(project_id), "status": locked_challenge.status},
+        payload={
+            "project_id": str(project_id),
+            "status": locked_challenge.status,
+            "promoted_source_count": promoted_source_count,
+        },
     ))
     return locked_challenge
 

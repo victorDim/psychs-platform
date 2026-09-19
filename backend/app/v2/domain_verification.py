@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 from typing import Protocol
+from urllib.parse import urlparse
 
 import dns.asyncresolver
 import dns.exception
@@ -19,6 +20,13 @@ class DnsVerificationUnavailable(RuntimeError):
 
 class TxtResolver(Protocol):
     async def resolve(self, name: str, rdtype: str, **kwargs): ...
+
+
+def source_belongs_to_domain(canonical_url: str, canonical_domain: str) -> bool:
+    """Return true only for the verified apex or one of its subdomains."""
+    hostname = (urlparse(canonical_url).hostname or "").lower().rstrip(".")
+    domain = canonical_domain.lower().rstrip(".")
+    return bool(domain) and (hostname == domain or hostname.endswith(f".{domain}"))
 
 
 async def dns_txt_matches(

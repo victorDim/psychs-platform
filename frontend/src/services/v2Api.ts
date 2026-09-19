@@ -47,6 +47,8 @@ export interface Project {
   name: string;
   canonical_domain: string;
   description?: string;
+  domain_verification_status: 'unverified' | 'verified';
+  domain_verified_at: string | null;
   created_at: string;
 }
 

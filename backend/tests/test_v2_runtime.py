@@ -12,7 +12,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
-from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_matches
+from app.v2.domain_verification import (
+    DnsVerificationUnavailable,
+    dns_txt_matches,
+    source_belongs_to_domain,
+)
 from app.v2.routes import (
     AuthoritativeSourceCreate,
     DomainVerificationResultResponse,
@@ -154,6 +158,21 @@ def test_domain_verification_result_maps_persisted_challenge_identifier():
     )
     result = DomainVerificationResultResponse.model_validate(persisted)
     assert result.challenge_id == challenge_id
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://example.com/docs", True),
+        ("https://docs.example.com/", True),
+        ("https://deep.docs.example.com/", True),
+        ("https://evilexample.com/", False),
+        ("https://example.com.evil.test/", False),
+        ("https://example.test/?target=example.com", False),
+    ],
+)
+def test_source_domain_trust_uses_hostname_boundaries(url, expected):
+    assert source_belongs_to_domain(url, "example.com") is expected
 
 
 def test_observed_evidence_command_rejects_unbounded_or_untrusted_provenance():

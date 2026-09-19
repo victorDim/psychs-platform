@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, Copy, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 
 import {
@@ -15,14 +15,22 @@ import {
 interface DomainVerificationPanelProps {
   project: Project;
   canManage: boolean;
+  onVerified: () => Promise<void>;
 }
 
-export const DomainVerificationPanel: React.FC<DomainVerificationPanelProps> = ({ project, canManage }) => {
+export const DomainVerificationPanel: React.FC<DomainVerificationPanelProps> = ({ project, canManage, onVerified }) => {
   const [challenge, setChallenge] = useState<DomainVerificationChallenge | null>(null);
   const [result, setResult] = useState<DomainVerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    setChallenge(null);
+    setResult(null);
+    setError(null);
+    setCopied(null);
+  }, [project.id]);
 
   const handleError = async (reason: unknown) => {
     if (reason instanceof StepUpAuthenticationRequiredError) {
@@ -51,7 +59,9 @@ export const DomainVerificationPanel: React.FC<DomainVerificationPanelProps> = (
     setBusy(true);
     setError(null);
     try {
-      setResult(await v2Api.verifyDomain(project.id, challenge.challenge_id));
+      const nextResult = await v2Api.verifyDomain(project.id, challenge.challenge_id);
+      setResult(nextResult);
+      if (nextResult.status === 'verified') await onVerified();
     } catch (reason) {
       await handleError(reason);
     } finally {
@@ -68,7 +78,8 @@ export const DomainVerificationPanel: React.FC<DomainVerificationPanelProps> = (
     }
   };
 
-  const verified = result?.status === 'verified';
+  const verified = project.domain_verification_status === 'verified' || result?.status === 'verified';
+  const verifiedAt = project.domain_verified_at || result?.verified_at;
   return (
     <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -77,7 +88,10 @@ export const DomainVerificationPanel: React.FC<DomainVerificationPanelProps> = (
           <p className="mt-1 text-sm text-slate-400">Prove control of <span className="font-mono text-slate-300">{project.canonical_domain}</span> with a short-lived DNS TXT challenge.</p>
         </div>
         {verified ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-800 px-3 py-1 text-xs text-emerald-300"><Check className="h-3 w-3" /> Verified</span>
+          <div className="text-right">
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-800 px-3 py-1 text-xs text-emerald-300"><Check className="h-3 w-3" /> Verified</span>
+            {verifiedAt && <p className="mt-1 text-[10px] text-slate-500">Since {new Date(verifiedAt).toLocaleString()}</p>}
+          </div>
         ) : canManage && !challenge ? (
           <button type="button" disabled={busy} onClick={() => void createChallenge()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">
             {busy && <LoaderCircle className="h-4 w-4 animate-spin" />} Start verification

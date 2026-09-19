@@ -6,6 +6,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
+import app.v2.worker as v2_worker
 from app.database.bootstrap_tenant import BootstrapSettings, bootstrap_tenant
 from app.v2.provider_collection import ObservedProviderResponse
 from app.v2.worker import (
@@ -625,3 +626,76 @@ def test_worker_collects_real_evidence_once_per_durable_job():
                 "An observed response from the injected provider boundary.",
                 True,
             )
+
+
+def test_worker_persists_domain_trust_and_promotes_only_owned_sources(monkeypatch):
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, _, user, _ = _seed_two_tenants()
+    project, challenge, job_id = uuid4(), uuid4(), uuid4()
+    owned_source, external_source = uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                   VALUES (%s, %s, %s, 'Trust Project', 'example.com', %s)""",
+                (project, tenant, f"trust-{project.hex[:8]}", user),
+            )
+            cursor.executemany(
+                """INSERT INTO authoritative_sources
+                       (id, tenant_id, project_id, canonical_url, source_type, owner_label, created_by)
+                   VALUES (%s, %s, %s, %s, 'website', %s, %s)""",
+                [
+                    (owned_source, tenant, project, "https://docs.example.com/", "Owned", user),
+                    (external_source, tenant, project, "https://evilexample.com/", "External", user),
+                ],
+            )
+            cursor.execute(
+                """INSERT INTO domain_verification_challenges
+                       (id, tenant_id, project_id, token_hash, expires_at, created_by)
+                   VALUES (%s, %s, %s, repeat('f', 64), now() + interval '15 minutes', %s)""",
+                (challenge, tenant, project, user),
+            )
+            cursor.execute(
+                """INSERT INTO jobs
+                       (id, tenant_id, project_id, job_type, payload, idempotency_key,
+                        request_hash, created_by)
+                   VALUES (%s, %s, %s, 'domain_verification',
+                           jsonb_build_object('challenge_id', %s::text), %s, repeat('f', 64), %s)""",
+                (job_id, tenant, project, challenge, f"idempotency-{job_id}", user),
+            )
+
+    async def matches(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(v2_worker, "dns_txt_matches", matches)
+    job = ClaimedJob(
+        job_id,
+        tenant,
+        project,
+        user,
+        "domain_verification",
+        {"challenge_id": str(challenge)},
+        1,
+        5,
+    )
+    with psycopg.connect(WORKER_URL) as connection:
+        result = v2_worker.execute_domain_verification(connection, job)
+    assert result == {"challenge_id": str(challenge), "status": "verified"}
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT domain_verification_status, domain_verified_at IS NOT NULL
+                   FROM projects WHERE id = %s""",
+                (project,),
+            )
+            assert cursor.fetchone() == ("verified", True)
+            cursor.execute(
+                """SELECT id, verification_status FROM authoritative_sources
+                   WHERE id IN (%s, %s) ORDER BY id""",
+                (owned_source, external_source),
+            )
+            statuses = dict(cursor.fetchall())
+            assert statuses[owned_source] == "verified"
+            assert statuses[external_source] == "unverified"

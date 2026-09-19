@@ -120,7 +120,28 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
             cursor.execute(
                 sql.SQL("GRANT SELECT, INSERT ON job_attempts, job_dead_letters TO {}").format(sql.Identifier(role))
             )
-            cursor.execute(sql.SQL("GRANT SELECT ON projects TO {}").format(sql.Identifier(role)))
+            cursor.execute(
+                sql.SQL("GRANT SELECT (id, tenant_id, canonical_domain) ON projects TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            cursor.execute(
+                sql.SQL(
+                    "GRANT UPDATE (domain_verification_status, domain_verified_at, updated_at) "
+                    "ON projects TO {}"
+                ).format(sql.Identifier(role))
+            )
+            cursor.execute(
+                sql.SQL(
+                    "GRANT SELECT (id, tenant_id, project_id, canonical_url, verification_status) "
+                    "ON authoritative_sources TO {}"
+                ).format(sql.Identifier(role))
+            )
+            cursor.execute(
+                sql.SQL(
+                    "GRANT UPDATE (verification_status, updated_at) ON authoritative_sources TO {}"
+                ).format(sql.Identifier(role))
+            )
             cursor.execute(sql.SQL("GRANT SELECT ON domain_verification_challenges TO {}").format(sql.Identifier(role)))
             cursor.execute(
                 sql.SQL(
