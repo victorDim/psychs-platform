@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import jwt
@@ -12,7 +13,13 @@ from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
 from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_matches
-from app.v2.routes import AuthoritativeSourceCreate, EvidenceObservationCreate, ProjectCreate, TokenRevocationCreate
+from app.v2.routes import (
+    AuthoritativeSourceCreate,
+    DomainVerificationResultResponse,
+    EvidenceObservationCreate,
+    ProjectCreate,
+    TokenRevocationCreate,
+)
 from app.v2.settings import V2Settings
 
 
@@ -132,6 +139,20 @@ def test_token_revocation_command_requires_timezone_and_bounded_identifier():
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             reason="security response",
         )
+
+
+def test_domain_verification_result_maps_persisted_challenge_identifier():
+    challenge_id = uuid4()
+    persisted = SimpleNamespace(
+        id=challenge_id,
+        status="pending",
+        attempt_count=0,
+        last_checked_at=None,
+        verified_at=None,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+    )
+    result = DomainVerificationResultResponse.model_validate(persisted)
+    assert result.challenge_id == challenge_id
 
 
 def test_observed_evidence_command_rejects_unbounded_or_untrusted_provenance():

@@ -93,6 +93,24 @@ export interface EvidenceRetentionEvent {
   executed_at: string;
 }
 
+export interface DomainVerificationChallenge {
+  challenge_id: string;
+  domain: string;
+  verification_method: 'dns_txt';
+  dns_record_name: string;
+  dns_record_value: string;
+  expires_at: string;
+}
+
+export interface DomainVerificationResult {
+  challenge_id: string;
+  status: 'pending' | 'verified' | 'expired' | 'superseded' | 'failed';
+  attempt_count: number;
+  last_checked_at?: string;
+  verified_at?: string;
+  expires_at: string;
+}
+
 export const v2Api = {
   listProjects: () => request<Project[]>('/projects'),
   createProject: (project: ProjectCreate) => request<Project>('/projects', {
@@ -103,6 +121,14 @@ export const v2Api = {
   listSources: (projectId: string) => request<AuthoritativeSource[]>(`/projects/${encodeURIComponent(projectId)}/sources`),
   listEvidence: (projectId: string) => request<EvidenceObservation[]>(`/projects/${encodeURIComponent(projectId)}/evidence-observations`),
   listRetentionEvents: () => request<EvidenceRetentionEvent[]>('/evidence-retention-events'),
+  createDomainVerificationChallenge: (projectId: string) =>
+    request<DomainVerificationChallenge>(`/projects/${encodeURIComponent(projectId)}/domain-verification-challenges`, {
+      method: 'POST',
+    }),
+  verifyDomain: (projectId: string, challengeId: string) =>
+    request<DomainVerificationResult>(`/projects/${encodeURIComponent(projectId)}/domain-verification-challenges/${encodeURIComponent(challengeId)}/verify`, {
+      method: 'POST',
+    }),
   createSource: (projectId: string, source: Pick<AuthoritativeSource, 'canonical_url' | 'source_type' | 'owner_label' | 'snapshot_policy'>) =>
     request<AuthoritativeSource>(`/projects/${encodeURIComponent(projectId)}/sources`, {
       method: 'POST',

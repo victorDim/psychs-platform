@@ -133,7 +133,7 @@ class DomainVerificationChallengeResponse(BaseModel):
 class DomainVerificationResultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    challenge_id: UUID
+    challenge_id: UUID = Field(validation_alias="id")
     status: Literal["pending", "verified", "expired", "superseded", "failed"]
     attempt_count: int
     last_checked_at: Optional[datetime]

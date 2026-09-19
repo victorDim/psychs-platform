@@ -3,6 +3,7 @@ import { Database, ExternalLink, FolderPlus, LoaderCircle, Plus, ShieldCheck } f
 
 import { AuthSessionControl, useAuthentication } from './auth/AuthGate';
 import { ProjectOnboarding } from './components/production/ProjectOnboarding';
+import { DomainVerificationPanel } from './components/production/DomainVerificationPanel';
 import { RetentionHistory } from './components/production/RetentionHistory';
 import {
   type AuthoritativeSource,
@@ -28,6 +29,7 @@ export const ProductionApp: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const canWriteProjects = user.scopes.includes('projects:write');
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
 
   useEffect(() => {
     void v2Api.listProjects()
@@ -124,6 +126,7 @@ export const ProductionApp: React.FC = () => {
           )
         ) : (
           <>
+            {selectedProject && <DomainVerificationPanel project={selectedProject} canManage={canWriteProjects} />}
             <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <h2 className="mb-4 font-semibold">Registered sources</h2>
