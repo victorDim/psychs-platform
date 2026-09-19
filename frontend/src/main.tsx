@@ -1,6 +1,6 @@
 import React, { Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
-import { AuthGate, AuthSessionControl } from './auth/AuthGate'
+import { AuthGate } from './auth/AuthGate'
 import { ProductionApp } from './ProductionApp'
 import './index.css'
 
@@ -11,10 +11,12 @@ const LegacyDemoApp = import.meta.env.DEV
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthGate>
-      {legacyDemoEnabled && LegacyDemoApp
-        ? <Suspense fallback={null}><LegacyDemoApp /><AuthSessionControl /></Suspense>
-        : <ProductionApp />}
-    </AuthGate>
+    {legacyDemoEnabled && LegacyDemoApp
+      ? <Suspense fallback={null}><LegacyDemoApp /></Suspense>
+      : (
+        <AuthGate>
+          <ProductionApp />
+        </AuthGate>
+      )}
   </React.StrictMode>,
 )
