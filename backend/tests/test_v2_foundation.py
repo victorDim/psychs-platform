@@ -119,6 +119,15 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "uq_evidence_provider_request" in evidence
     assert "'collector'" in evidence
 
+    retention = migrations["0007_evidence_retention.py"]
+    assert 'down_revision = "0006_observed_evidence"' in retention
+    assert "FOR UPDATE SKIP LOCKED" in retention
+    assert "SECURITY DEFINER" in retention
+    assert "SET row_security = off" in retention
+    assert "evidence_retention_events_tenant_read" in retention
+    assert "evidence_retention_events_immutable" in retention
+    assert "REVOKE ALL ON FUNCTION purge_expired_evidence" in retention
+
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)
         revision = next(

@@ -265,6 +265,84 @@ def test_observed_evidence_is_tenant_scoped_and_immutable():
                     )
 
 
+def test_worker_purges_only_expired_evidence_and_writes_tenant_receipt():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant_a, tenant_b, user_a, _ = _seed_two_tenants()
+    project_id, expired_id, retained_id = uuid4(), uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                VALUES (%s, %s, %s, 'Retention Project', 'retention.example.com', %s)
+                """,
+                (project_id, tenant_a, f"retention-{project_id.hex[:8]}", user_a),
+            )
+            cursor.executemany(
+                """
+                INSERT INTO evidence_observations (
+                    id, tenant_id, project_id, provider, model_identifier, prompt_text,
+                    response_text, observed_at, content_hash, idempotency_key, request_hash,
+                    collected_by, retention_expires_at, created_at
+                ) VALUES (
+                    %s, %s, %s, 'provider', 'model', 'prompt', 'observed response',
+                    now() - interval '3 days', repeat('a', 64), %s, repeat('b', 64), %s,
+                    %s, %s
+                )
+                """,
+                [
+                    (
+                        expired_id, tenant_a, project_id, f"expired-{expired_id}", user_a,
+                        "2000-01-02 00:00:00+00", "2000-01-01 00:00:00+00",
+                    ),
+                    (
+                        retained_id, tenant_a, project_id, f"retained-{retained_id}", user_a,
+                        "2100-01-02 00:00:00+00", "2000-01-01 00:00:00+00",
+                    ),
+                ],
+            )
+
+    with psycopg.connect(WORKER_URL) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    cursor.execute("DELETE FROM evidence_observations WHERE id = %s", (expired_id,))
+            cursor.execute(
+                "SELECT tenant_id, deleted_count FROM purge_expired_evidence(%s, %s)",
+                (100, "integration-retention-worker"),
+            )
+            assert cursor.fetchall() == [(tenant_a, 1)]
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM evidence_observations WHERE id IN (%s, %s) ORDER BY id",
+                (expired_id, retained_id),
+            )
+            assert cursor.fetchall() == [(retained_id,)]
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute(
+                "SELECT deleted_count, executor FROM evidence_retention_events ORDER BY executed_at DESC"
+            )
+            assert cursor.fetchone() == (1, "integration-retention-worker")
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_b)
+            cursor.execute("SELECT count(*) FROM evidence_retention_events")
+            assert cursor.fetchone()[0] == 0
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+                with connection.transaction():
+                    cursor.execute("DELETE FROM evidence_retention_events WHERE tenant_id = %s", (tenant_a,))
+
+
 def test_jobs_are_tenant_isolated_and_worker_can_claim_across_tenants():
     if not WORKER_URL:
         pytest.skip("Worker PostgreSQL URL is not configured")

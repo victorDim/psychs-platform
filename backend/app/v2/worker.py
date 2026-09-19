@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from .domain_verification import DnsVerificationUnavailable, dns_txt_matches
 from .metrics import (
+    record_evidence_retention,
     record_job_claim,
     record_job_outcome,
     record_retry_delay,
@@ -47,6 +48,8 @@ class WorkerSettings:
     otel_enabled: bool = False
     otel_metrics_endpoint: str = ""
     otel_service_name: str = "psychs-worker"
+    retention_cleanup_interval_seconds: int = 300
+    retention_cleanup_batch_size: int = 1000
 
     @classmethod
     def from_environment(cls) -> "WorkerSettings":
@@ -75,6 +78,12 @@ class WorkerSettings:
             otel_enabled=otel_enabled_raw == "true",
             otel_metrics_endpoint=metrics_endpoint,
             otel_service_name=os.environ.get("OTEL_SERVICE_NAME", "psychs-worker").strip(),
+            retention_cleanup_interval_seconds=int(
+                os.environ.get("PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS", "300")
+            ),
+            retention_cleanup_batch_size=int(
+                os.environ.get("PSYCHS_RETENTION_CLEANUP_BATCH_SIZE", "1000")
+            ),
         )
         if not 15 <= settings.lease_seconds <= 3600:
             raise RuntimeError("PSYCHS_JOB_LEASE_SECONDS must be between 15 and 3600")
@@ -88,6 +97,12 @@ class WorkerSettings:
             raise RuntimeError("OTEL_SERVICE_NAME must contain between 1 and 128 characters")
         if settings.environment not in {"development", "test", "staging", "production"}:
             raise RuntimeError("PSYCHS_ENVIRONMENT is invalid")
+        if not 60 <= settings.retention_cleanup_interval_seconds <= 86400:
+            raise RuntimeError(
+                "PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS must be between 60 and 86400"
+            )
+        if not 1 <= settings.retention_cleanup_batch_size <= 10000:
+            raise RuntimeError("PSYCHS_RETENTION_CLEANUP_BATCH_SIZE must be between 1 and 10000")
         if settings.otel_enabled and not settings.otel_metrics_endpoint:
             raise RuntimeError("An OTLP endpoint is required when OTEL_ENABLED is true")
         if (
@@ -373,6 +388,23 @@ def run_once(settings: WorkerSettings) -> bool:
         return True
 
 
+def purge_expired_evidence(settings: WorkerSettings) -> int:
+    """Delete one bounded batch through the database-owned retention contract."""
+    try:
+        with psycopg.connect(settings.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT deleted_count FROM purge_expired_evidence(%s, %s)",
+                    (settings.retention_cleanup_batch_size, settings.worker_id),
+                )
+                deleted_count = sum(row[0] for row in cursor.fetchall())
+        record_evidence_retention("success", deleted_count)
+        return deleted_count
+    except Exception:
+        record_evidence_retention("failure")
+        raise
+
+
 def main() -> None:
     settings = WorkerSettings.from_environment()
     global LOGGER
@@ -385,6 +417,7 @@ def main() -> None:
         version=os.environ.get("PSYCHS_VERSION", "2.0.0"),
     )
     stopping = False
+    next_retention_cleanup = time.monotonic()
 
     def request_stop(_signum, _frame) -> None:
         nonlocal stopping
@@ -396,6 +429,14 @@ def main() -> None:
     try:
         while not stopping:
             try:
+                now = time.monotonic()
+                if now >= next_retention_cleanup:
+                    # Schedule the next attempt before I/O so an outage cannot create
+                    # a tight retry loop across every worker replica.
+                    next_retention_cleanup = now + settings.retention_cleanup_interval_seconds
+                    deleted_count = purge_expired_evidence(settings)
+                    if deleted_count:
+                        LOGGER.info("Expired evidence observations deleted: %s", deleted_count)
                 if not run_once(settings):
                     time.sleep(settings.poll_seconds)
             except Exception:

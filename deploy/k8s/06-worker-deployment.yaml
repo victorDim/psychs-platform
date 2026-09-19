@@ -80,6 +80,10 @@ spec:
               value: "10"
             - name: PSYCHS_JOB_RETRY_CAP_SECONDS
               value: "900"
+            - name: PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS
+              value: "300"
+            - name: PSYCHS_RETENTION_CLEANUP_BATCH_SIZE
+              value: "1000"
           resources:
             requests:
               cpu: "100m"

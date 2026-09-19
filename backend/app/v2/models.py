@@ -293,3 +293,21 @@ class EvidenceObservation(Base):
     )
     retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceRetentionEvent(Base):
+    __tablename__ = "evidence_retention_events"
+    __table_args__ = (
+        Index("ix_evidence_retention_events_tenant_executed", "tenant_id", "executed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    deleted_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    retention_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    oldest_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    newest_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    executor: Mapped[str] = mapped_column(String(128), nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

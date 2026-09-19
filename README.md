@@ -29,6 +29,7 @@ The new `/api/v2` foundation adds:
 - tenant-scoped authoritative-source registration with canonical URL and SSRF validation;
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
 - a service-identity-only observed-evidence ingestion API with idempotency, provenance hashes, immutable tenant-RLS storage, and a non-synthetic production UI;
+- bounded, lock-safe evidence expiry with least-privilege worker execution and append-only tenant-visible retention receipts;
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
 - a production control-plane UI that renders only authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;

@@ -18,6 +18,7 @@ maintenance periods:
 | Job reliability | 99.5% of terminal executions succeed | `psychs.jobs.completions` |
 | Worker health | No sustained loop failures | `psychs.worker.loop.failures` |
 | Retry pressure | Retry outcomes below 5% of job outcomes | `psychs.jobs.completions{job.outcome="retry"}` |
+| Retention health | No failed scheduled retention runs | `psychs.evidence.retention.runs{retention.outcome="failure"}` |
 
 The deployment must also collect PostgreSQL availability, connection saturation,
 replication and backup freshness, and the age and count of `queued` and
@@ -30,7 +31,8 @@ from individual application processes.
   rate over both 30-minute and 6-hour windows.
 - Page immediately when dead-letter outcomes occur for security-sensitive jobs,
   the oldest runnable job exceeds 15 minutes, the worker loop fails continuously
-  for 5 minutes, or database backup freshness exceeds the approved RPO.
+  for 5 minutes, retention automation fails twice consecutively, or database
+  backup freshness exceeds the approved RPO.
 - Create a ticket—not a page—for a single transient retry, isolated 4xx growth,
   or latency degradation that consumes less than 10% of the monthly error budget.
 
@@ -39,8 +41,8 @@ from individual application processes.
 1. Confirm impact using request rate, status code, route template, job type, and
    outcome. Never add tenant or job IDs as metric labels.
 2. Correlate the time window with structured logs and trace IDs. Inspect the
-   append-only `job_attempts`, `job_dead_letters`, and `audit_events` records for
-   scoped diagnosis.
+   append-only `job_attempts`, `job_dead_letters`, `audit_events`, and
+   `evidence_retention_events` records for scoped diagnosis.
 3. Check PostgreSQL, Redis, DNS, OIDC/JWKS, and OTLP collector health before
    restarting workloads. Preserve evidence before manual job intervention.
 4. Stop further rollout when error-budget burn began after a release. Roll back

@@ -25,6 +25,7 @@ from .models import (
     AuthoritativeSource,
     DomainVerificationChallenge,
     EvidenceObservation,
+    EvidenceRetentionEvent,
     IdempotencyRecord,
     Job,
     Project,
@@ -252,6 +253,17 @@ class EvidenceObservationResponse(BaseModel):
     created_at: datetime
 
 
+class EvidenceRetentionEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    deleted_count: int
+    retention_cutoff: datetime
+    oldest_observed_at: datetime
+    newest_observed_at: datetime
+    executed_at: datetime
+
+
 @router.get("/projects", response_model=list[ProjectResponse])
 async def list_projects(
     limit: int = 100,
@@ -461,6 +473,24 @@ async def list_evidence_observations(
         )
         .order_by(EvidenceObservation.observed_at.desc(), EvidenceObservation.created_at.desc())
         .limit(min(max(limit, 1), 50))
+    )
+    return result.scalars().all()
+
+
+@router.get(
+    "/evidence-retention-events",
+    response_model=list[EvidenceRetentionEventResponse],
+)
+async def list_evidence_retention_events(
+    limit: int = 25,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(EvidenceRetentionEvent)
+        .where(EvidenceRetentionEvent.tenant_id == context.tenant_id)
+        .order_by(EvidenceRetentionEvent.executed_at.desc())
+        .limit(min(max(limit, 1), 100))
     )
     return result.scalars().all()
 

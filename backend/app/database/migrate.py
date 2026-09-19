@@ -92,6 +92,9 @@ def provision_application_role(owner_url: str, role: str, password: str) -> None
             cursor.execute(
                 sql.SQL("GRANT SELECT, INSERT ON evidence_observations TO {}").format(sql.Identifier(role))
             )
+            cursor.execute(
+                sql.SQL("GRANT SELECT ON evidence_retention_events TO {}").format(sql.Identifier(role))
+            )
 
 
 def provision_worker_role(owner_url: str, role: str, password: str) -> None:
@@ -126,6 +129,11 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
                 ).format(sql.Identifier(role))
             )
             cursor.execute(sql.SQL("GRANT INSERT ON audit_events TO {}").format(sql.Identifier(role)))
+            cursor.execute(
+                sql.SQL(
+                    "GRANT EXECUTE ON FUNCTION purge_expired_evidence(INTEGER, VARCHAR) TO {}"
+                ).format(sql.Identifier(role))
+            )
 
 
 def main() -> None:

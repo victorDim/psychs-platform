@@ -36,11 +36,20 @@ tenant-RLS-protected ledger. Collectors cannot submit inferred or synthetic
 records through this endpoint.
 
 Records are retained for `PSYCHS_EVIDENCE_RETENTION_DAYS` (90 days by default).
-The API role cannot update or delete them. A narrowly scoped maintenance task
-using migration-owner credentials may delete rows only after
-`retention_expires_at`; the database trigger rejects earlier deletion. Configure
-and approve this value against contractual, privacy, and litigation-hold needs
-before collecting production data.
+The API role cannot update or delete them. The dedicated worker calls a
+database-owned function every `PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS` and
+deletes at most `PSYCHS_RETENTION_CLEANUP_BATCH_SIZE` expired records per run.
+The worker has no direct `DELETE` grant; the function uses ordered
+`FOR UPDATE SKIP LOCKED` batches and atomically writes an append-only,
+tenant-visible receipt. The database trigger rejects deletion before
+`retention_expires_at`. Configure and approve retention against contractual,
+privacy, litigation-hold, and regional deletion requirements before collecting
+production data.
+
+The migration owner that creates `purge_expired_evidence` must be permitted to
+bypass forced RLS; the function explicitly fails closed otherwise. Never change
+the function owner to the API or worker role. Tenants can inspect receipts at
+`GET /api/v2/evidence-retention-events`.
 
 ## Operating checks
 
@@ -54,6 +63,8 @@ before collecting production data.
 - Correlate provider request IDs, Psychs request IDs, and content hashes, but
   never log bearer tokens or provider credentials.
 - Sample provider responses against their stored hashes and source request IDs.
+- Alert on failed retention runs and reconcile deletion counts with the
+  append-only receipt ledger.
 - Confirm cross-tenant reads and writes remain denied after every migration.
 - Treat prompts and responses as customer data: apply the tenant's retention,
   export, and deletion policy before expanding collection beyond staging.

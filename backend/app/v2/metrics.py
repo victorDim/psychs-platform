@@ -45,6 +45,16 @@ API_PROTECTION_EVENTS = _meter.create_counter(
     description="Requests rejected or degraded by API abuse controls",
     unit="{event}",
 )
+EVIDENCE_RETENTION_RUNS = _meter.create_counter(
+    "psychs.evidence.retention.runs",
+    description="Automated evidence-retention run outcomes",
+    unit="{run}",
+)
+EVIDENCE_RETENTION_DELETIONS = _meter.create_counter(
+    "psychs.evidence.retention.deletions",
+    description="Expired evidence observations deleted by retention automation",
+    unit="{observation}",
+)
 
 
 def _method(value: str) -> str:
@@ -85,3 +95,10 @@ def record_api_protection_event(control: str, outcome: str) -> None:
     safe_control = control if control in {"request_body", "rate_limit"} else "other"
     safe_outcome = outcome if outcome in {"rejected", "unavailable"} else "other"
     API_PROTECTION_EVENTS.add(1, {"protection.control": safe_control, "protection.outcome": safe_outcome})
+
+
+def record_evidence_retention(outcome: str, deleted_count: int = 0) -> None:
+    safe_outcome = outcome if outcome in {"success", "failure"} else "failure"
+    EVIDENCE_RETENTION_RUNS.add(1, {"retention.outcome": safe_outcome})
+    if safe_outcome == "success" and deleted_count > 0:
+        EVIDENCE_RETENTION_DELETIONS.add(deleted_count)

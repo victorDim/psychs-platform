@@ -20,3 +20,17 @@ def test_worker_rejects_unsafe_timing(monkeypatch):
     monkeypatch.setenv("PSYCHS_JOB_LEASE_SECONDS", "1")
     with pytest.raises(RuntimeError, match="LEASE_SECONDS"):
         WorkerSettings.from_environment()
+
+
+def test_worker_rejects_unbounded_retention_batch(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_RETENTION_CLEANUP_BATCH_SIZE", "10001")
+    with pytest.raises(RuntimeError, match="CLEANUP_BATCH_SIZE"):
+        WorkerSettings.from_environment()
+
+
+def test_worker_rejects_aggressive_retention_interval(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_RETENTION_CLEANUP_INTERVAL_SECONDS", "59")
+    with pytest.raises(RuntimeError, match="CLEANUP_INTERVAL_SECONDS"):
+        WorkerSettings.from_environment()

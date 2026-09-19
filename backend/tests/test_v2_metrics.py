@@ -47,6 +47,19 @@ def test_api_protection_metrics_bound_labels(monkeypatch):
     ]
 
 
+def test_retention_metrics_bound_outcomes_and_count_deletions(monkeypatch):
+    runs, deletions = _Instrument(), _Instrument()
+    monkeypatch.setattr(platform_metrics, "EVIDENCE_RETENTION_RUNS", runs)
+    monkeypatch.setattr(platform_metrics, "EVIDENCE_RETENTION_DELETIONS", deletions)
+    platform_metrics.record_evidence_retention("unexpected", 99)
+    platform_metrics.record_evidence_retention("success", 3)
+    assert runs.calls == [
+        (1, {"retention.outcome": "failure"}),
+        (1, {"retention.outcome": "success"}),
+    ]
+    assert deletions.calls == [(3, None)]
+
+
 def test_metrics_endpoint_is_derived_from_trace_endpoint():
     settings = V2Settings(
         _env_file=None,
