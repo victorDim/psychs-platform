@@ -216,6 +216,55 @@ def test_active_token_revocations_are_tenant_scoped_and_immutable():
                     cursor.execute("DELETE FROM revoked_access_tokens WHERE id = %s", (revocation_id,))
 
 
+def test_observed_evidence_is_tenant_scoped_and_immutable():
+    tenant_a, tenant_b, user_a, _ = _seed_two_tenants()
+    project_id, observation_id = uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                VALUES (%s, %s, %s, 'Evidence Project', 'evidence.example.com', %s)
+                """,
+                (project_id, tenant_a, f"evidence-{project_id.hex[:8]}", user_a),
+            )
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute(
+                """
+                INSERT INTO evidence_observations (
+                    id, tenant_id, project_id, provider, model_identifier, prompt_text,
+                    response_text, observed_at, content_hash, idempotency_key, request_hash, collected_by
+                ) VALUES (
+                    %s, %s, %s, 'provider', 'model', 'prompt', 'observed response', now(),
+                    repeat('c', 64), 'evidence-idempotency-key', repeat('d', 64), %s
+                )
+                """,
+                (observation_id, tenant_a, project_id, user_a),
+            )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    _set_tenant(cursor, tenant_a)
+                    cursor.execute("DELETE FROM evidence_observations WHERE id = %s", (observation_id,))
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_b)
+            cursor.execute("SELECT id FROM evidence_observations WHERE id = %s", (observation_id,))
+            assert cursor.fetchone() is None
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.RaiseException, match="retained evidence observations are immutable"):
+                with connection.transaction():
+                    cursor.execute(
+                        "UPDATE evidence_observations SET response_text = 'tampered' WHERE id = %s",
+                        (observation_id,),
+                    )
+
+
 def test_jobs_are_tenant_isolated_and_worker_can_claim_across_tenants():
     if not WORKER_URL:
         pytest.skip("Worker PostgreSQL URL is not configured")

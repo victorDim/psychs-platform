@@ -32,6 +32,12 @@ class V2Settings(BaseSettings):
     oidc_step_up_amr_values_raw: str = Field(
         default="mfa,otp,hwk", validation_alias="PSYCHS_OIDC_STEP_UP_AMR_VALUES"
     )
+    evidence_max_observation_age_seconds: int = Field(
+        default=86400, ge=300, le=604800, validation_alias="PSYCHS_EVIDENCE_MAX_OBSERVATION_AGE_SECONDS"
+    )
+    evidence_retention_days: int = Field(
+        default=90, ge=1, le=2555, validation_alias="PSYCHS_EVIDENCE_RETENTION_DAYS"
+    )
     database_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DATABASE_POOL_SIZE")
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
     otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")

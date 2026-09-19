@@ -61,9 +61,26 @@ export interface AuthoritativeSource {
   created_at: string;
 }
 
+export interface EvidenceObservation {
+  id: string;
+  project_id: string;
+  evidence_class: 'observed';
+  provider: string;
+  model_identifier: string;
+  provider_request_id?: string;
+  prompt_text: string;
+  response_text: string;
+  citations: string[];
+  observed_at: string;
+  content_hash: string;
+  retention_expires_at: string;
+  created_at: string;
+}
+
 export const v2Api = {
   listProjects: () => request<Project[]>('/projects'),
   listSources: (projectId: string) => request<AuthoritativeSource[]>(`/projects/${encodeURIComponent(projectId)}/sources`),
+  listEvidence: (projectId: string) => request<EvidenceObservation[]>(`/projects/${encodeURIComponent(projectId)}/evidence-observations`),
   createSource: (projectId: string, source: Pick<AuthoritativeSource, 'canonical_url' | 'source_type' | 'owner_label' | 'snapshot_policy'>) =>
     request<AuthoritativeSource>(`/projects/${encodeURIComponent(projectId)}/sources`, {
       method: 'POST',

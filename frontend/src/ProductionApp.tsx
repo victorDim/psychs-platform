@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Database, ExternalLink, LoaderCircle, Plus, ShieldCheck } from 'lucide-react';
 
 import { AuthSessionControl } from './auth/AuthGate';
-import { type AuthoritativeSource, type Project, v2Api } from './services/v2Api';
+import { type AuthoritativeSource, type EvidenceObservation, type Project, v2Api } from './services/v2Api';
 
 export const ProductionApp: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [sources, setSources] = useState<AuthoritativeSource[]>([]);
+  const [observations, setObservations] = useState<EvidenceObservation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState('');
@@ -27,13 +28,19 @@ export const ProductionApp: React.FC = () => {
   const loadSources = useCallback(async (projectId: string) => {
     if (!projectId) {
       setSources([]);
+      setObservations([]);
       return;
     }
     setError(null);
     try {
-      setSources(await v2Api.listSources(projectId));
+      const [sourceRecords, evidenceRecords] = await Promise.all([
+        v2Api.listSources(projectId),
+        v2Api.listEvidence(projectId),
+      ]);
+      setSources(sourceRecords);
+      setObservations(evidenceRecords);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load authoritative sources');
+      setError(reason instanceof Error ? reason.message : 'Unable to load project evidence');
     }
   }, []);
 
@@ -85,8 +92,9 @@ export const ProductionApp: React.FC = () => {
             <p className="mt-2 text-sm text-slate-400">Ask a tenant administrator to provision your first project.</p>
           </section>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-            <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+          <>
+            <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+              <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <h2 className="mb-4 font-semibold">Registered sources</h2>
               <div className="space-y-3">
                 {sources.length === 0 && <p className="text-sm text-slate-500">No authoritative sources registered.</p>}
@@ -100,14 +108,49 @@ export const ProductionApp: React.FC = () => {
                   </article>
                 ))}
               </div>
-            </section>
-            <form onSubmit={addSource} className="h-fit rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+              </section>
+              <form onSubmit={addSource} className="h-fit rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <h2 className="mb-4 flex items-center gap-2 font-semibold"><Plus className="h-4 w-4" /> Register source</h2>
               <label className="mb-4 block text-xs text-slate-400">Public HTTP(S) URL<input required type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/docs" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
               <label className="mb-5 block text-xs text-slate-400">Owner label<input required value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Product documentation" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
               <button disabled={saving} className="w-full rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{saving ? 'Registering…' : 'Register authoritative source'}</button>
-            </form>
-          </div>
+              </form>
+            </div>
+            <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <h2 className="font-semibold">Observed AI evidence</h2>
+                <span className="text-xs text-slate-500">Immutable service-collected records</span>
+              </div>
+              <div className="space-y-3">
+                {observations.length === 0 && <p className="text-sm text-slate-500">No observed evidence has been collected for this project.</p>}
+                {observations.map((observation) => (
+                  <article key={observation.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium">{observation.provider} · {observation.model_identifier}</p>
+                        <p className="mt-1 text-xs text-slate-500">Observed {new Date(observation.observed_at).toLocaleString()}</p>
+                      </div>
+                      <span className="rounded-full border border-emerald-800 px-2 py-1 text-[10px] uppercase text-emerald-300">{observation.evidence_class}</span>
+                    </div>
+                    <p className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">Prompt</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-300">{observation.prompt_text}</p>
+                    <p className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">Response</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-200">{observation.response_text}</p>
+                    {observation.citations.length > 0 && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {observation.citations.map((citation) => (
+                          <a key={citation} href={citation} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 truncate rounded-lg border border-slate-800 px-2 py-1 text-xs text-cyan-400 hover:text-cyan-300">
+                            {citation}<ExternalLink className="h-3 w-3 shrink-0" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-4 truncate font-mono text-[10px] text-slate-600">SHA-256 {observation.content_hash}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </>
         )}
       </div>
       <AuthSessionControl />

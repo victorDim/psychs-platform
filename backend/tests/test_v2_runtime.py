@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.v2.auth import AuthenticationError, OIDCAuthenticator
 from app.v2.domain_verification import DnsVerificationUnavailable, dns_txt_matches
-from app.v2.routes import AuthoritativeSourceCreate, ProjectCreate, TokenRevocationCreate
+from app.v2.routes import AuthoritativeSourceCreate, EvidenceObservationCreate, ProjectCreate, TokenRevocationCreate
 from app.v2.settings import V2Settings
 
 
@@ -131,6 +131,36 @@ def test_token_revocation_command_requires_timezone_and_bounded_identifier():
             token_id="short",
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             reason="security response",
+        )
+
+
+def test_observed_evidence_command_rejects_unbounded_or_untrusted_provenance():
+    valid = EvidenceObservationCreate(
+        provider="openai",
+        model_identifier="gpt-observed",
+        provider_request_id="request-123",
+        prompt_text="What does Example make?",
+        response_text="Example makes production software.",
+        citations=["https://example.com/about"],
+        observed_at=datetime.now(timezone.utc),
+    )
+    assert valid.citations == ["https://example.com/about"]
+    with pytest.raises(ValidationError, match="timezone"):
+        EvidenceObservationCreate(
+            provider="openai",
+            model_identifier="gpt-observed",
+            prompt_text="Prompt",
+            response_text="Response",
+            observed_at=datetime.now(),
+        )
+    with pytest.raises(ValidationError, match="credentials"):
+        EvidenceObservationCreate(
+            provider="openai",
+            model_identifier="gpt-observed",
+            prompt_text="Prompt",
+            response_text="Response",
+            citations=["https://user:secret@example.com/source"],
+            observed_at=datetime.now(timezone.utc),
         )
 
 

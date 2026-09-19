@@ -116,13 +116,24 @@ def _has_recent_step_up(context: RequestContext) -> bool:
     return acr_match or amr_match
 
 
-def require_permission(permission: str, *, step_up: bool = False, human_only: bool = False) -> Callable:
+def require_permission(
+    permission: str,
+    *,
+    step_up: bool = False,
+    human_only: bool = False,
+    service_only: bool = False,
+) -> Callable:
+    if human_only and service_only:
+        raise ValueError("A permission dependency cannot require both human and service principals")
+
     async def dependency(context: RequestContext = Depends(get_request_context)) -> RequestContext:
         decision = authorize(context, permission)
         if not decision.allowed:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=decision.reason)
         if human_only and context.principal_type != "human":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="human_principal_required")
+        if service_only and context.principal_type != "service":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="service_principal_required")
         if step_up and not _has_recent_step_up(context):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

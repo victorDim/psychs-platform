@@ -1,14 +1,18 @@
 """Dependency-free tests for v2 context, policy, and migration invariants."""
 
 import ast
+import asyncio
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from app.v2.context import RequestContext
-from app.v2.dependencies import _has_recent_step_up
-from app.v2.policy import VIEW_PROJECTS, WRITE_PROJECTS, authorize
+from app.v2.dependencies import _has_recent_step_up, require_permission
+from app.v2.policy import INGEST_EVIDENCE, VIEW_PROJECTS, WRITE_PROJECTS, authorize
 
 
 def _context(role: str, scopes=frozenset({VIEW_PROJECTS, WRITE_PROJECTS})) -> RequestContext:
@@ -53,6 +57,21 @@ def test_step_up_rejects_service_stale_and_unverified_authentication():
     assert _has_recent_step_up(replace(context, acr=None, amr=frozenset({"pwd"}))) is False
 
 
+def test_observed_evidence_ingestion_requires_collector_service_identity():
+    service = replace(
+        _context("collector", {VIEW_PROJECTS, INGEST_EVIDENCE}),
+        principal_type="service",
+        auth_time=None,
+        amr=frozenset(),
+    )
+    dependency = require_permission(INGEST_EVIDENCE, service_only=True)
+    assert asyncio.run(dependency(service)) is service
+    with pytest.raises(HTTPException, match="service_principal_required"):
+        asyncio.run(dependency(replace(service, principal_type="human")))
+    with pytest.raises(ValueError):
+        require_permission(INGEST_EVIDENCE, human_only=True, service_only=True)
+
+
 def test_v2_migration_forces_rls_with_write_checks():
     versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
     migrations = {
@@ -91,6 +110,14 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "revoked_access_tokens_tenant_isolation" in identity
     assert "revoked_access_tokens_immutability" in identity
     assert "OLD.expires_at > clock_timestamp() - interval '30 seconds'" in identity
+
+    evidence = migrations["0006_observed_evidence.py"]
+    assert 'down_revision = "0005_identity_assurance"' in evidence
+    assert "evidence_class = 'observed'" in evidence
+    assert "evidence_observations_tenant_isolation" in evidence
+    assert "evidence_observations_immutable" in evidence
+    assert "uq_evidence_provider_request" in evidence
+    assert "'collector'" in evidence
 
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)

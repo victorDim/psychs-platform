@@ -247,3 +247,49 @@ class RevokedAccessToken(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceObservation(Base):
+    __tablename__ = "evidence_observations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_evidence_tenant_id"),
+        UniqueConstraint("tenant_id", "project_id", "idempotency_key", name="uq_evidence_idempotency"),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            name="fk_evidence_tenant_project",
+            ondelete="CASCADE",
+        ),
+        Index("ix_evidence_tenant_project_observed", "tenant_id", "project_id", "observed_at"),
+        Index(
+            "uq_evidence_provider_request",
+            "tenant_id",
+            "project_id",
+            "provider",
+            "provider_request_id",
+            unique=True,
+            postgresql_where=text("provider_request_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    evidence_class: Mapped[str] = mapped_column(String(16), nullable=False, default="observed")
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_request_id: Mapped[Optional[str]] = mapped_column(String(255))
+    prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
+    response_text: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    collected_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

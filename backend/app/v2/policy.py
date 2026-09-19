@@ -12,6 +12,7 @@ MANAGE_TENANT = "tenant:manage"
 APPROVE_CHANGES = "changes:approve"
 MANAGE_SECURITY = "security:manage"
 MANAGE_BILLING = "billing:manage"
+INGEST_EVIDENCE = "evidence:write"
 
 
 ROLE_PERMISSIONS: Dict[str, FrozenSet[str]] = {
@@ -28,7 +29,9 @@ ROLE_PERMISSIONS: Dict[str, FrozenSet[str]] = {
         APPROVE_CHANGES,
         MANAGE_SECURITY,
         MANAGE_BILLING,
+        INGEST_EVIDENCE,
     }),
+    "collector": frozenset({VIEW_PROJECTS, INGEST_EVIDENCE}),
 }
 
 

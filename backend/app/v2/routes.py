@@ -24,12 +24,13 @@ from .models import (
     AuditEvent,
     AuthoritativeSource,
     DomainVerificationChallenge,
+    EvidenceObservation,
     IdempotencyRecord,
     Job,
     Project,
     RevokedAccessToken,
 )
-from .policy import MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJECTS
+from .policy import INGEST_EVIDENCE, MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJECTS
 from .settings import get_v2_settings
 from .repositories import ProjectRepository
 
@@ -178,6 +179,74 @@ class TokenRevocationResponse(BaseModel):
     id: UUID
     expires_at: datetime
     reason: str
+    created_at: datetime
+
+
+class EvidenceObservationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/ -]*$")
+    model_identifier: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/ -]*$")
+    provider_request_id: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    prompt_text: str = Field(min_length=1, max_length=8_000)
+    response_text: str = Field(min_length=1, max_length=64_000)
+    citations: list[str] = Field(default_factory=list, max_length=50)
+    observed_at: datetime
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return value.lower()
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_observed_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("observed_at must include a timezone")
+        return value
+
+    @field_validator("citations")
+    @classmethod
+    def validate_citations(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            citation = value.strip()
+            if len(citation) > 2048:
+                raise ValueError("Citation URLs must contain at most 2048 characters")
+            parsed = urlparse(citation)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("Citations must be absolute HTTP(S) URLs")
+            if parsed.username or parsed.password:
+                raise ValueError("Citation URLs must not contain credentials")
+            if citation not in seen:
+                normalized.append(citation)
+                seen.add(citation)
+        return normalized
+
+    @field_validator("provider_request_id", "prompt_text", "response_text")
+    @classmethod
+    def reject_null_characters(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and "\x00" in value:
+            raise ValueError("Text fields must not contain null characters")
+        return value
+
+
+class EvidenceObservationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    evidence_class: Literal["observed"]
+    provider: str
+    model_identifier: str
+    provider_request_id: Optional[str]
+    prompt_text: str
+    response_text: str
+    citations: list[str]
+    observed_at: datetime
+    content_hash: str
+    retention_expires_at: datetime
     created_at: datetime
 
 
@@ -369,6 +438,137 @@ async def create_authoritative_source(
         payload={"project_id": str(project_id), "canonical_url": source.canonical_url},
     ))
     return source
+
+
+@router.get(
+    "/projects/{project_id}/evidence-observations",
+    response_model=list[EvidenceObservationResponse],
+)
+async def list_evidence_observations(
+    project_id: UUID,
+    limit: int = 25,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    await _tenant_project(session, context, project_id)
+    result = await session.execute(
+        select(EvidenceObservation)
+        .where(
+            EvidenceObservation.tenant_id == context.tenant_id,
+            EvidenceObservation.project_id == project_id,
+        )
+        .order_by(EvidenceObservation.observed_at.desc(), EvidenceObservation.created_at.desc())
+        .limit(min(max(limit, 1), 50))
+    )
+    return result.scalars().all()
+
+
+@router.post(
+    "/projects/{project_id}/evidence-observations",
+    response_model=EvidenceObservationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_evidence_observation(
+    project_id: UUID,
+    command: EvidenceObservationCreate,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=16, max_length=255),
+    context: RequestContext = Depends(require_permission(INGEST_EVIDENCE, service_only=True)),
+    session: AsyncSession = Depends(get_session),
+):
+    await _tenant_project(session, context, project_id)
+    now = datetime.now(timezone.utc)
+    observed_at = command.observed_at.astimezone(timezone.utc)
+    settings = get_v2_settings()
+    if observed_at > now + timedelta(minutes=5):
+        raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
+    if observed_at < now - timedelta(seconds=settings.evidence_max_observation_age_seconds):
+        raise HTTPException(status_code=422, detail="Observation is older than the ingestion policy permits")
+
+    canonical_payload = {
+        **command.model_dump(exclude={"observed_at"}),
+        "observed_at": observed_at.isoformat(),
+        "evidence_class": "observed",
+        "project_id": str(project_id),
+    }
+    canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
+    request_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:{project_id}:evidence:{idempotency_key}"},
+    )
+    existing = (
+        await session.execute(
+            select(EvidenceObservation).where(
+                EvidenceObservation.tenant_id == context.tenant_id,
+                EvidenceObservation.project_id == project_id,
+                EvidenceObservation.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="Idempotency key reused with different input")
+        return existing
+
+    if command.provider_request_id:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {
+                "lock_key": (
+                    f"{context.tenant_id}:{project_id}:provider-request:"
+                    f"{command.provider}:{command.provider_request_id}"
+                )
+            },
+        )
+        provider_duplicate = (
+            await session.execute(
+                select(EvidenceObservation).where(
+                    EvidenceObservation.tenant_id == context.tenant_id,
+                    EvidenceObservation.project_id == project_id,
+                    EvidenceObservation.provider == command.provider,
+                    EvidenceObservation.provider_request_id == command.provider_request_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if provider_duplicate:
+            if provider_duplicate.request_hash != request_hash:
+                raise HTTPException(status_code=409, detail="Provider request ID reused with different evidence")
+            return provider_duplicate
+
+    observation = EvidenceObservation(
+        tenant_id=context.tenant_id,
+        project_id=project_id,
+        evidence_class="observed",
+        provider=command.provider,
+        model_identifier=command.model_identifier,
+        provider_request_id=command.provider_request_id,
+        prompt_text=command.prompt_text,
+        response_text=command.response_text,
+        citations=command.citations,
+        observed_at=observed_at,
+        content_hash=request_hash,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        collected_by=context.principal_id,
+        retention_expires_at=now + timedelta(days=settings.evidence_retention_days),
+    )
+    session.add(observation)
+    await session.flush()
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="evidence_observation.created",
+        resource_type="evidence_observation",
+        resource_id=observation.id,
+        payload={
+            "project_id": str(project_id),
+            "provider": observation.provider,
+            "model_identifier": observation.model_identifier,
+            "content_hash": observation.content_hash,
+        },
+    ))
+    return observation
 
 
 @router.post(

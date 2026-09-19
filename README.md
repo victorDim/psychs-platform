@@ -28,6 +28,7 @@ The new `/api/v2` foundation adds:
 - tenant-scoped project creation with idempotency and audit records;
 - tenant-scoped authoritative-source registration with canonical URL and SSRF validation;
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
+- a service-identity-only observed-evidence ingestion API with idempotency, provenance hashes, immutable tenant-RLS storage, and a non-synthetic production UI;
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
 - a production control-plane UI that renders only authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;
@@ -104,5 +105,7 @@ Before production promotion, all of the following are mandatory:
 5. Keep CodeQL, full-history secret scanning, dependency locks, SBOMs, signed images, provenance attestations, and container scanning green; triage security alerts before promotion.
 6. Exercise staging smoke tests, rollback, disaster recovery, load tests, and a third-party penetration test.
 7. Confirm that every customer-visible metric distinguishes observed, inferred, and synthetic evidence.
+
+Production collectors must follow [the observed evidence collector contract](docs/runbooks/evidence-collector.md). The current ledger intentionally accepts only observed records; inferred and synthetic data require separate, explicitly labeled pipelines before they may appear in the production UI.
 
 The detailed audit, PRD, and architectural roadmap are maintained as project planning artifacts outside this repository working tree.
