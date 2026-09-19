@@ -31,7 +31,7 @@ The new `/api/v2` foundation adds:
 - a service-identity-only observed-evidence ingestion API with idempotency, provenance hashes, immutable tenant-RLS storage, and a non-synthetic production UI;
 - bounded, lock-safe evidence expiry with least-privilege worker execution and append-only tenant-visible retention receipts;
 - browser OIDC Authorization Code + PKCE with session-scoped token storage;
-- a production control-plane UI that renders only authenticated `/api/v2` records;
+- a production control-plane UI for real tenant project onboarding, authoritative sources, observed evidence, and retention receipts, backed only by authenticated `/api/v2` records;
 - vendor-neutral OTLP/HTTP tracing correlated with structured request logs;
 - low-cardinality OTLP metrics for HTTP traffic and durable-job outcomes, with an SLO and alert runbook;
 - OCI SBOM/provenance attestations, fixable high/critical image scanning, and keyless Cosign signatures;
@@ -62,9 +62,8 @@ npm run build
 Production frontend builds require the public `VITE_OIDC_AUTHORITY`,
 `VITE_OIDC_CLIENT_ID`, and optional audience/scope values documented in
 `.env.example`. Never place a client secret in a `VITE_*` variable. The legacy
-simulation UI is available only from the Vite development server when
-`VITE_ENABLE_LEGACY_DEMO_UI=true`; production builds exclude that path and its
-synthetic fixtures. Configure the identity provider with exact callback and
+simulation UI is not reachable from the application entry point; production
+builds exclude that code and its synthetic fixtures. Configure the identity provider with exact callback and
 post-logout URLs, refresh-token rotation for the public client, and access-token
 claims for `sub`, `tenant_id`, `aud`, `jti`, `iat`, `exp`, and the requested
 `scope` values. Sensitive human operations additionally require recent
@@ -110,5 +109,7 @@ Before production promotion, all of the following are mandatory:
 7. Confirm that every customer-visible metric distinguishes observed, inferred, and synthetic evidence.
 
 Production collectors must follow [the observed evidence collector contract](docs/runbooks/evidence-collector.md). The current ledger intentionally accepts only observed records; inferred and synthetic data require separate, explicitly labeled pipelines before they may appear in the production UI.
+
+Provision the first real tenant administrator with the guarded [tenant bootstrap runbook](docs/runbooks/tenant-bootstrap.md). Psychs does not trust token claims to create tenants or privileged memberships automatically.
 
 The detailed audit, PRD, and architectural roadmap are maintained as project planning artifacts outside this repository working tree.

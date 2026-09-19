@@ -71,6 +71,30 @@ services:
     networks:
       - psychs-network
 
+  # Explicit, idempotent first-tenant provisioning. This profile is never
+  # started with the long-running application stack.
+  bootstrap:
+    profiles: ["bootstrap"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - MIGRATION_DATABASE_URL=postgresql://${POSTGRES_USER:-psychs}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-psychs_db}
+      - PSYCHS_ENVIRONMENT=${PSYCHS_ENVIRONMENT:-development}
+      - PSYCHS_BOOTSTRAP_TENANT_SLUG=${PSYCHS_BOOTSTRAP_TENANT_SLUG:-}
+      - PSYCHS_BOOTSTRAP_TENANT_NAME=${PSYCHS_BOOTSTRAP_TENANT_NAME:-}
+      - PSYCHS_BOOTSTRAP_EXTERNAL_SUBJECT=${PSYCHS_BOOTSTRAP_EXTERNAL_SUBJECT:-}
+      - PSYCHS_BOOTSTRAP_EMAIL=${PSYCHS_BOOTSTRAP_EMAIL:-}
+      - PSYCHS_BOOTSTRAP_ROLE=${PSYCHS_BOOTSTRAP_ROLE:-platform_admin}
+      - PSYCHS_BOOTSTRAP_CONFIRM=${PSYCHS_BOOTSTRAP_CONFIRM:-}
+    command: ["python", "-m", "app.database.bootstrap_tenant"]
+    networks:
+      - psychs-network
+
   # ----------------------------------------------------------------------------
   # 4. Psychs v2 API control plane
   # ----------------------------------------------------------------------------

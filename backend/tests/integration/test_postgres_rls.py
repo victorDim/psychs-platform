@@ -6,6 +6,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
+from app.database.bootstrap_tenant import BootstrapSettings, bootstrap_tenant
 from app.v2.worker import ClaimedJob, WorkerSettings, claim_next_job, fail_job
 
 
@@ -51,6 +52,36 @@ def _seed_two_tenants():
 
 def _set_tenant(cursor, tenant_id):
     cursor.execute("SELECT set_config('app.current_tenant_id', %s, true)", (str(tenant_id),))
+
+
+def test_first_tenant_bootstrap_is_idempotent_and_audited():
+    suffix = uuid4().hex[:10]
+    settings = BootstrapSettings(
+        database_url=OWNER_URL,
+        environment="test",
+        tenant_slug=f"bootstrap-{suffix}",
+        tenant_name=f"Bootstrap {suffix}",
+        external_subject=f"oidc|bootstrap-{suffix}",
+        email=f"bootstrap-{suffix}@example.invalid",
+        role="platform_admin",
+    )
+    tenant_id, user_id, created = bootstrap_tenant(settings)
+    assert created is True
+    repeated_tenant, repeated_user, repeated_created = bootstrap_tenant(settings)
+    assert (repeated_tenant, repeated_user, repeated_created) == (tenant_id, user_id, False)
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT role, active FROM memberships WHERE tenant_id = %s AND user_id = %s",
+                (tenant_id, user_id),
+            )
+            assert cursor.fetchone() == ("platform_admin", True)
+            cursor.execute(
+                "SELECT count(*) FROM audit_events WHERE tenant_id = %s AND action = 'tenant.bootstrap_completed'",
+                (tenant_id,),
+            )
+            assert cursor.fetchone()[0] == 1
 
 
 def test_rls_denies_missing_context_and_cross_tenant_access():

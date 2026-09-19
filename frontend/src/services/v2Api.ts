@@ -50,6 +50,13 @@ export interface Project {
   created_at: string;
 }
 
+export interface ProjectCreate {
+  name: string;
+  slug: string;
+  canonical_domain: string;
+  description?: string;
+}
+
 export interface AuthoritativeSource {
   id: string;
   project_id: string;
@@ -77,10 +84,25 @@ export interface EvidenceObservation {
   created_at: string;
 }
 
+export interface EvidenceRetentionEvent {
+  id: string;
+  deleted_count: number;
+  retention_cutoff: string;
+  oldest_observed_at: string;
+  newest_observed_at: string;
+  executed_at: string;
+}
+
 export const v2Api = {
   listProjects: () => request<Project[]>('/projects'),
+  createProject: (project: ProjectCreate) => request<Project>('/projects', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(project),
+  }),
   listSources: (projectId: string) => request<AuthoritativeSource[]>(`/projects/${encodeURIComponent(projectId)}/sources`),
   listEvidence: (projectId: string) => request<EvidenceObservation[]>(`/projects/${encodeURIComponent(projectId)}/evidence-observations`),
+  listRetentionEvents: () => request<EvidenceRetentionEvent[]>('/evidence-retention-events'),
   createSource: (projectId: string, source: Pick<AuthoritativeSource, 'canonical_url' | 'source_type' | 'owner_label' | 'snapshot_policy'>) =>
     request<AuthoritativeSource>(`/projects/${encodeURIComponent(projectId)}/sources`, {
       method: 'POST',
