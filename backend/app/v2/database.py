@@ -9,7 +9,7 @@ from .settings import get_v2_settings
 
 
 settings = get_v2_settings()
-EXPECTED_DATABASE_REVISION = "0003_domain_verify_attempts"
+EXPECTED_DATABASE_REVISION = "0004_durable_jobs"
 engine = create_async_engine(
     settings.async_database_url,
     pool_pre_ping=True,

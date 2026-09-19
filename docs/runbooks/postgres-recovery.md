@@ -29,6 +29,8 @@ export MIGRATION_DATABASE_URL='postgresql://migration-owner:...@db.example/psych
 export DATABASE_URL='postgresql://psychs_app:...@db.example/psychs_staging'
 export DATABASE_APP_USER='psychs_app'
 export DATABASE_APP_PASSWORD='...'
+export DATABASE_WORKER_USER='psychs_worker'
+export DATABASE_WORKER_PASSWORD='...'
 export RESTORE_DRILL_DATABASE='psychs_staging_restore_drill'
 export PSYCHS_ALLOW_DESTRUCTIVE_RESTORE_DRILL='true'
 python -m app.database.recovery_drill

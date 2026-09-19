@@ -4,7 +4,7 @@ Psychs is an AI brand-perception and Generative Engine Optimization platform. Th
 
 ## Current status
 
-This codebase is **not yet approved for production traffic**. The production control-plane foundation, browser OIDC authentication, telemetry, and signed release pipeline are in place. Remaining domain migrations, a provider-specific staging identity exercise, durable background processing, and end-to-end staging validation remain release blockers. PostgreSQL migrations, cross-tenant RLS, and logical backup restoration are exercised against PostgreSQL 16 in CI.
+This codebase is **not yet approved for production traffic**. The production control-plane foundation, browser OIDC authentication, telemetry, signed release pipeline, and durable tenant-scoped PostgreSQL worker are in place. Remaining domain migrations, a provider-specific staging identity exercise, and end-to-end staging validation remain release blockers. PostgreSQL migrations, cross-tenant RLS, worker retry/dead-letter behavior, and logical backup restoration are exercised against PostgreSQL 16 in CI.
 
 The software now fails closed by default:
 
@@ -23,6 +23,7 @@ The new `/api/v2` foundation adds:
 - centralized role-and-scope authorization;
 - SQLAlchemy repositories with transaction-local tenant identity;
 - Alembic migrations with forced PostgreSQL RLS and append-only audit events;
+- durable jobs with idempotent enqueueing, atomic `SKIP LOCKED` leases, bounded retries, cancellation, and append-only dead-letter history;
 - tenant-scoped project creation with idempotency and audit records;
 - tenant-scoped authoritative-source registration with canonical URL and SSRF validation;
 - one-time, hashed DNS ownership challenges with bounded TXT verification and audit history;
@@ -83,9 +84,9 @@ docker compose config
 docker compose build
 ```
 
-The production Compose profile runs the FastAPI v2 control plane. Startup fails unless PostgreSQL, Redis, an exact CORS allowlist, and the managed OIDC issuer/audience/JWKS settings are configured. Its migration service uses the owner credential once, provisions a non-owner application role, and never exposes the owner credential to the API container.
+The production Compose profile runs the FastAPI v2 control plane and a separate background worker. Startup fails unless PostgreSQL, Redis, an exact CORS allowlist, and the managed OIDC issuer/audience/JWKS settings are configured. Its migration service uses the owner credential once, provisions distinct API and trusted cross-tenant worker roles, and never exposes the owner credential to either runtime container.
 
-Before starting Compose, generate separate strong values for `POSTGRES_PASSWORD`, `DATABASE_APP_PASSWORD`, `REDIS_PASSWORD`, and any remaining signing/approval secrets. URL-encode credentials when constructing URLs manually.
+Before starting Compose, generate separate strong values for `POSTGRES_PASSWORD`, `DATABASE_APP_PASSWORD`, `DATABASE_WORKER_PASSWORD`, `REDIS_PASSWORD`, and any remaining signing/approval secrets. URL-encode credentials when constructing URLs manually.
 
 ## Production release gates
 

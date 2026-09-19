@@ -62,6 +62,13 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert 'down_revision = "0002_authoritative_sources"' in attempts
     assert "attempt_count >= 0" in attempts
 
+    jobs = migrations["0004_durable_jobs.py"]
+    assert 'down_revision = "0003_domain_verify_attempts"' in jobs
+    assert "FORCE ROW LEVEL SECURITY" in jobs
+    assert "uq_jobs_idempotency" in jobs
+    assert "uq_job_attempt_event" in jobs
+    assert "prevent_job_history_mutation" in jobs
+
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)
         revision = next(

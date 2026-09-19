@@ -25,6 +25,7 @@ from .models import (
     AuthoritativeSource,
     DomainVerificationChallenge,
     IdempotencyRecord,
+    Job,
     Project,
 )
 from .policy import VIEW_PROJECTS, WRITE_PROJECTS
@@ -132,6 +133,26 @@ class DomainVerificationResultResponse(BaseModel):
     last_checked_at: Optional[datetime]
     verified_at: Optional[datetime]
     expires_at: datetime
+
+
+class JobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    job_type: Literal["domain_verification"]
+    status: Literal["queued", "running", "retry_wait", "succeeded", "dead_letter", "cancelled"]
+    priority: int
+    result: Optional[dict]
+    attempt_count: int
+    max_attempts: int
+    available_at: datetime
+    cancellation_requested_at: Optional[datetime]
+    last_error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
@@ -468,3 +489,135 @@ async def verify_domain_verification_challenge(
         payload={"project_id": str(project_id), "status": locked_challenge.status},
     ))
     return locked_challenge
+
+
+@router.post(
+    "/projects/{project_id}/domain-verification-challenges/{challenge_id}/jobs",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def enqueue_domain_verification_job(
+    project_id: UUID,
+    challenge_id: UUID,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=16, max_length=255),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    await _tenant_project(session, context, project_id)
+    challenge = (
+        await session.execute(
+            select(DomainVerificationChallenge).where(
+                DomainVerificationChallenge.id == challenge_id,
+                DomainVerificationChallenge.tenant_id == context.tenant_id,
+                DomainVerificationChallenge.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if challenge is None:
+        raise HTTPException(status_code=404, detail="Verification challenge not found")
+    if challenge.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Verification challenge is {challenge.status}")
+
+    payload = {"challenge_id": str(challenge_id)}
+    request_hash = hashlib.sha256(
+        json.dumps({"project_id": str(project_id), **payload}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:domain_verification:{idempotency_key}"},
+    )
+    existing = (
+        await session.execute(
+            select(Job).where(
+                Job.tenant_id == context.tenant_id,
+                Job.job_type == "domain_verification",
+                Job.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="Idempotency key reused with different input")
+        return existing
+
+    job = Job(
+        tenant_id=context.tenant_id,
+        project_id=project_id,
+        job_type="domain_verification",
+        payload=payload,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        created_by=context.principal_id,
+    )
+    session.add(job)
+    await session.flush()
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="job.enqueued",
+        resource_type="job",
+        resource_id=job.id,
+        payload={"job_type": job.job_type, "project_id": str(project_id)},
+    ))
+    return job
+
+
+@router.get("/jobs", response_model=list[JobResponse])
+async def list_jobs(
+    limit: int = 100,
+    project_id: Optional[UUID] = None,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    query = select(Job).where(Job.tenant_id == context.tenant_id)
+    if project_id is not None:
+        query = query.where(Job.project_id == project_id)
+    result = await session.execute(query.order_by(Job.created_at.desc()).limit(min(max(limit, 1), 100)))
+    return result.scalars().all()
+
+
+async def _tenant_job(session: AsyncSession, context: RequestContext, job_id: UUID) -> Job:
+    job = (
+        await session.execute(select(Job).where(Job.tenant_id == context.tenant_id, Job.id == job_id))
+    ).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.get("/jobs/{job_id}", response_model=JobResponse)
+async def get_job(
+    job_id: UUID,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _tenant_job(session, context, job_id)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
+async def cancel_job(
+    job_id: UUID,
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    job = await _tenant_job(session, context, job_id)
+    await session.refresh(job, with_for_update=True)
+    if job.status in {"succeeded", "dead_letter", "cancelled"}:
+        return job
+    now = datetime.now(timezone.utc)
+    previous_status = job.status
+    job.cancellation_requested_at = now
+    if job.status in {"queued", "retry_wait"}:
+        job.status = "cancelled"
+        job.completed_at = now
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="job.cancellation_requested",
+        resource_type="job",
+        resource_id=job.id,
+        payload={"job_type": job.job_type, "previous_status": previous_status},
+    ))
+    return job

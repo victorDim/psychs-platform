@@ -150,3 +150,79 @@ class AuditEvent(Base):
     resource_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_jobs_tenant_id"),
+        UniqueConstraint("tenant_id", "job_type", "idempotency_key", name="uq_jobs_idempotency"),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"], ["projects.tenant_id", "projects.id"],
+            name="fk_jobs_tenant_project", ondelete="CASCADE",
+        ),
+        Index("ix_jobs_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(128))
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cancellation_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(String(2000))
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class JobAttempt(Base):
+    __tablename__ = "job_attempts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "job_id", "attempt_number", "outcome", name="uq_job_attempt_event"),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"],
+            name="fk_attempt_tenant_job", ondelete="CASCADE",
+        ),
+        Index("ix_job_attempts_tenant_job", "tenant_id", "job_id", "attempt_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(String(2000))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class JobDeadLetter(Base):
+    __tablename__ = "job_dead_letters"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "job_id", name="uq_job_dead_letter"),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"], ["jobs.tenant_id", "jobs.id"],
+            name="fk_dead_letter_tenant_job", ondelete="CASCADE",
+        ),
+        Index("ix_job_dead_letters_tenant_failed", "tenant_id", "failed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    final_error: Mapped[str] = mapped_column(String(2000), nullable=False)
+    failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

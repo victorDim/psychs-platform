@@ -20,7 +20,7 @@ from uuid import uuid4
 import psycopg
 from psycopg import sql
 
-from app.database.migrate import provision_application_role
+from app.database.migrate import provision_application_role, provision_worker_role
 
 
 TABLES = (
@@ -32,6 +32,9 @@ TABLES = (
     "audit_events",
     "authoritative_sources",
     "domain_verification_challenges",
+    "jobs",
+    "job_attempts",
+    "job_dead_letters",
 )
 RLS_TABLES = TABLES
 TARGET_SUFFIX = "_restore_drill"
@@ -220,6 +223,10 @@ def main() -> None:
     app_url = _required("DATABASE_URL")
     app_user = _required("DATABASE_APP_USER")
     app_password = _required("DATABASE_APP_PASSWORD")
+    worker_user = _required("DATABASE_WORKER_USER")
+    worker_password = _required("DATABASE_WORKER_PASSWORD")
+    if app_user == worker_user:
+        raise RuntimeError("Recovery drill requires distinct application and worker roles")
     target_database = _required("RESTORE_DRILL_DATABASE")
     _validate_target(owner_url, target_database)
 
@@ -261,6 +268,7 @@ def main() -> None:
             )
 
         provision_application_role(target_owner_url, app_user, app_password)
+        provision_worker_role(target_owner_url, worker_user, worker_password)
         _verify_restored_security(target_owner_url, target_app_url, expected)
         print(
             "PostgreSQL recovery drill passed: "

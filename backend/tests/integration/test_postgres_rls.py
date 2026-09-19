@@ -6,9 +6,12 @@ from uuid import uuid4
 import psycopg
 import pytest
 
+from app.v2.worker import WorkerSettings, claim_next_job, fail_job
+
 
 OWNER_URL = os.environ.get("MIGRATION_DATABASE_URL", "")
 APP_URL = os.environ.get("DATABASE_URL", "")
+WORKER_URL = os.environ.get("DATABASE_WORKER_URL", "")
 
 pytestmark = pytest.mark.skipif(
     not OWNER_URL or not APP_URL,
@@ -179,3 +182,128 @@ def test_audit_events_are_append_only_for_application_role():
                 with connection.transaction():
                     _set_tenant(cursor, tenant_a)
                     cursor.execute("DELETE FROM audit_events WHERE id = %s", (event_id,))
+
+
+def test_jobs_are_tenant_isolated_and_worker_can_claim_across_tenants():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant_a, tenant_b, user_a, user_b = _seed_two_tenants()
+    project_a, project_b, job_a, job_b = uuid4(), uuid4(), uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (project_a, tenant_a, f"job-a-{project_a.hex[:8]}", "Job A", "a.example.com", user_a),
+                    (project_b, tenant_b, f"job-b-{project_b.hex[:8]}", "Job B", "b.example.com", user_b),
+                ],
+            )
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute(
+                """
+                INSERT INTO jobs
+                    (id, tenant_id, project_id, job_type, payload, idempotency_key, request_hash, created_by)
+                VALUES (%s, %s, %s, 'domain_verification', '{}'::jsonb, %s, repeat('a', 64), %s)
+                """,
+                (job_a, tenant_a, project_a, f"idempotency-{job_a}", user_a),
+            )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    _set_tenant(cursor, tenant_a)
+                    cursor.execute(
+                        """
+                        INSERT INTO jobs
+                            (id, tenant_id, project_id, job_type, payload, idempotency_key, request_hash, created_by)
+                        VALUES (%s, %s, %s, 'domain_verification', '{}'::jsonb, %s, repeat('b', 64), %s)
+                        """,
+                        (job_b, tenant_b, project_b, f"idempotency-{job_b}", user_b),
+                    )
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO jobs
+                    (id, tenant_id, project_id, job_type, payload, idempotency_key, request_hash, created_by)
+                VALUES (%s, %s, %s, 'domain_verification', '{}'::jsonb, %s, repeat('b', 64), %s)
+                """,
+                (job_b, tenant_b, project_b, f"idempotency-{job_b}", user_b),
+            )
+
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant_a)
+            cursor.execute("SELECT id FROM jobs ORDER BY id")
+            assert cursor.fetchall() == [(job_a,)]
+
+    with psycopg.connect(WORKER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM jobs WHERE id IN (%s, %s) ORDER BY id", (job_a, job_b))
+            assert {row[0] for row in cursor.fetchall()} == {job_a, job_b}
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    cursor.execute("INSERT INTO projects (tenant_id, slug, name, canonical_domain, created_by) VALUES (%s, 'forbidden', 'Forbidden', 'forbidden.example.com', %s)", (tenant_a, user_a))
+
+
+def test_worker_claim_retry_and_dead_letter_are_durable():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, _, user, _ = _seed_two_tenants()
+    project, challenge, job_id = uuid4(), uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by)
+                   VALUES (%s, %s, %s, 'Worker Project', 'worker.example.com', %s)""",
+                (project, tenant, f"worker-{project.hex[:8]}", user),
+            )
+            cursor.execute(
+                """INSERT INTO domain_verification_challenges
+                       (id, tenant_id, project_id, token_hash, expires_at, created_by)
+                   VALUES (%s, %s, %s, repeat('c', 64), now() + interval '15 minutes', %s)""",
+                (challenge, tenant, project, user),
+            )
+            cursor.execute(
+                """INSERT INTO jobs
+                       (id, tenant_id, project_id, job_type, payload, idempotency_key,
+                        request_hash, created_by, max_attempts, priority)
+                   VALUES (%s, %s, %s, 'domain_verification', jsonb_build_object('challenge_id', %s::text),
+                           %s, repeat('c', 64), %s, 2, 100)""",
+                (job_id, tenant, project, challenge, f"idempotency-{job_id}", user),
+            )
+
+    settings = WorkerSettings(
+        database_url=WORKER_URL,
+        worker_id=f"integration-worker-{job_id.hex[:8]}",
+        retry_base_seconds=1,
+        retry_cap_seconds=1,
+    )
+    with psycopg.connect(WORKER_URL) as connection:
+        first = claim_next_job(connection, settings)
+        assert first is not None and first.id == job_id and first.attempt_count == 1
+        assert fail_job(connection, first, settings, RuntimeError("temporary"), retryable=True)
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE jobs SET available_at = now() - interval '1 second' WHERE id = %s", (job_id,))
+
+    with psycopg.connect(WORKER_URL) as connection:
+        second = claim_next_job(connection, settings)
+        assert second is not None and second.id == job_id and second.attempt_count == 2
+        assert fail_job(connection, second, settings, RuntimeError("permanent"), retryable=True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status, attempt_count FROM jobs WHERE id = %s", (job_id,))
+            assert cursor.fetchone() == ("dead_letter", 2)
+            cursor.execute("SELECT outcome FROM job_attempts WHERE job_id = %s ORDER BY started_at, outcome", (job_id,))
+            assert sorted(outcome for outcome, in cursor.fetchall()) == ["dead_letter", "retry", "running", "running"]
+            cursor.execute("SELECT count(*) FROM job_dead_letters WHERE job_id = %s", (job_id,))
+            assert cursor.fetchone()[0] == 1
+            with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+                with connection.transaction():
+                    cursor.execute("DELETE FROM job_attempts WHERE job_id = %s", (job_id,))

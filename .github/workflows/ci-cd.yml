@@ -58,7 +58,7 @@ jobs:
         run: |
           python -m compileall -q backend
           python backend/run_tests.py
-          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_recovery_drill.py backend/tests/test_ci_security_enforcers.py
+          python -m pytest -q backend/tests/test_v2_runtime.py backend/tests/test_v2_worker.py backend/tests/test_recovery_drill.py backend/tests/test_ci_security_enforcers.py
 
       - name: Validate FastAPI Application and Offline Migration
         working-directory: backend
@@ -77,6 +77,9 @@ jobs:
           DATABASE_URL: postgresql://psychs_app:ci-application-password-32-chars@127.0.0.1:5432/psychs_ci
           DATABASE_APP_USER: psychs_app
           DATABASE_APP_PASSWORD: ci-application-password-32-chars
+          DATABASE_WORKER_URL: postgresql://psychs_worker:ci-worker-password-32-characters@127.0.0.1:5432/psychs_ci
+          DATABASE_WORKER_USER: psychs_worker
+          DATABASE_WORKER_PASSWORD: ci-worker-password-32-characters
         run: |
           python -m app.database.migrate
           python -m pytest -q tests/integration/test_postgres_rls.py
@@ -88,6 +91,9 @@ jobs:
           DATABASE_URL: postgresql://psychs_app:ci-application-password-32-chars@127.0.0.1:5432/psychs_ci
           DATABASE_APP_USER: psychs_app
           DATABASE_APP_PASSWORD: ci-application-password-32-chars
+          DATABASE_WORKER_URL: postgresql://psychs_worker:ci-worker-password-32-characters@127.0.0.1:5432/psychs_ci
+          DATABASE_WORKER_USER: psychs_worker
+          DATABASE_WORKER_PASSWORD: ci-worker-password-32-characters
           RESTORE_DRILL_DATABASE: psychs_ci_restore_drill
           PSYCHS_ALLOW_DESTRUCTIVE_RESTORE_DRILL: "true"
         run: |

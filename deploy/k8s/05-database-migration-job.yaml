@@ -33,13 +33,27 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          command: ["alembic", "upgrade", "head"]
+          command: ["python", "-m", "app.database.migrate"]
           env:
             - name: MIGRATION_DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: psychs-migration-secrets
                   key: database-url
+            - name: DATABASE_APP_USER
+              value: psychs_app
+            - name: DATABASE_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-migration-secrets
+                  key: database-app-password
+            - name: DATABASE_WORKER_USER
+              value: psychs_worker
+            - name: DATABASE_WORKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-migration-secrets
+                  key: database-worker-password
           resources:
             requests:
               cpu: "100m"

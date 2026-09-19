@@ -65,6 +65,8 @@ services:
       - MIGRATION_DATABASE_URL=postgresql://${POSTGRES_USER:-psychs}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-psychs_db}
       - DATABASE_APP_USER=${DATABASE_APP_USER:-psychs_app}
       - DATABASE_APP_PASSWORD=${DATABASE_APP_PASSWORD:?DATABASE_APP_PASSWORD must be set}
+      - DATABASE_WORKER_USER=${DATABASE_WORKER_USER:-psychs_worker}
+      - DATABASE_WORKER_PASSWORD=${DATABASE_WORKER_PASSWORD:?DATABASE_WORKER_PASSWORD must be set}
     command: ["python", "-m", "app.database.migrate"]
     networks:
       - psychs-network
@@ -134,6 +136,32 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
+
+  # Dedicated trusted worker identity can claim across tenants, but has no HTTP surface.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - DATABASE_WORKER_URL=postgresql://${DATABASE_WORKER_USER:-psychs_worker}:${DATABASE_WORKER_PASSWORD:?DATABASE_WORKER_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-psychs_db}
+      - PSYCHS_JOB_LEASE_SECONDS=${PSYCHS_JOB_LEASE_SECONDS:-60}
+      - PSYCHS_JOB_POLL_SECONDS=${PSYCHS_JOB_POLL_SECONDS:-2}
+      - PSYCHS_JOB_RETRY_BASE_SECONDS=${PSYCHS_JOB_RETRY_BASE_SECONDS:-10}
+      - PSYCHS_JOB_RETRY_CAP_SECONDS=${PSYCHS_JOB_RETRY_CAP_SECONDS:-900}
+    command: ["python", "-m", "app.v2.worker"]
+    networks:
+      - psychs-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
   # ----------------------------------------------------------------------------
   # 5. Psychs Frontend Command Center (Nginx Multi-Stage Static + Reverse Proxy)

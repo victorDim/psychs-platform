@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: psychs-worker
+  namespace: psychs-prod
+  labels:
+    app.kubernetes.io/name: psychs-worker
+    app.kubernetes.io/part-of: psychs-geo-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: psychs-worker
+  template:
+    metadata:
+      labels:
+        app: psychs-worker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ghcr.io/victordim/psychs-platform/psychs-backend:sha-REPLACE_WITH_COMMIT_SHA
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.v2.worker"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATABASE_WORKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: psychs-worker-secrets
+                  key: database-worker-url
+            - name: PSYCHS_JOB_LEASE_SECONDS
+              value: "60"
+            - name: PSYCHS_JOB_POLL_SECONDS
+              value: "2"
+            - name: PSYCHS_JOB_RETRY_BASE_SECONDS
+              value: "10"
+            - name: PSYCHS_JOB_RETRY_CAP_SECONDS
+              value: "900"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir: {}
