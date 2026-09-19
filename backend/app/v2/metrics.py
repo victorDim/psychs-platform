@@ -40,6 +40,11 @@ WORKER_LOOP_FAILURES = _meter.create_counter(
     description="Unhandled worker-loop failures",
     unit="{failure}",
 )
+API_PROTECTION_EVENTS = _meter.create_counter(
+    "psychs.api.protection.events",
+    description="Requests rejected or degraded by API abuse controls",
+    unit="{event}",
+)
 
 
 def _method(value: str) -> str:
@@ -74,3 +79,9 @@ def record_retry_delay(job_type: str, delay_seconds: int) -> None:
 
 def record_worker_loop_failure() -> None:
     WORKER_LOOP_FAILURES.add(1)
+
+
+def record_api_protection_event(control: str, outcome: str) -> None:
+    safe_control = control if control in {"request_body", "rate_limit"} else "other"
+    safe_outcome = outcome if outcome in {"rejected", "unavailable"} else "other"
+    API_PROTECTION_EVENTS.add(1, {"protection.control": safe_control, "protection.outcome": safe_outcome})

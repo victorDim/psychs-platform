@@ -16,4 +16,10 @@ Before applying them:
 9. Add environment-specific network policies or CNI FQDN policies for DNS, OIDC/JWKS, PostgreSQL, Redis, telemetry, and approved provider endpoints.
 10. Validate admission policy, image signatures, resource quotas, Pod Security Standards, rollback, and disaster recovery in staging.
 
+The ingress and API currently enforce a matching 1 MiB request-body limit. If
+an approved workload requires a different limit, update both
+`nginx.ingress.kubernetes.io/proxy-body-size` and
+`PSYCHS_MAX_REQUEST_BODY_BYTES` in the same reviewed deployment change; the
+application limit must never be higher than the trusted edge limit.
+
 The API deployment deliberately fails startup/readiness if its secure production configuration or required data services are unavailable.

@@ -30,7 +30,9 @@ from .models import (
     Project,
     RevokedAccessToken,
 )
+from .metrics import record_api_protection_event
 from .policy import INGEST_EVIDENCE, MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJECTS
+from .rate_limit import RateLimitUnavailable, get_rate_limiter
 from .settings import get_v2_settings
 from .repositories import ProjectRepository
 
@@ -479,6 +481,26 @@ async def create_evidence_observation(
     now = datetime.now(timezone.utc)
     observed_at = command.observed_at.astimezone(timezone.utc)
     settings = get_v2_settings()
+    try:
+        rate_decision = await get_rate_limiter().check(
+            context,
+            "evidence-ingest",
+            limit=settings.evidence_ingest_rate_limit,
+            window_seconds=settings.evidence_ingest_rate_window_seconds,
+        )
+    except RateLimitUnavailable as exc:
+        record_api_protection_event("rate_limit", "unavailable")
+        raise HTTPException(status_code=503, detail="Evidence ingestion is temporarily unavailable") from exc
+    if not rate_decision.allowed:
+        record_api_protection_event("rate_limit", "rejected")
+        raise HTTPException(
+            status_code=429,
+            detail="Evidence ingestion rate limit exceeded",
+            headers={
+                "Retry-After": str(rate_decision.retry_after_seconds),
+                "X-RateLimit-Remaining": "0",
+            },
+        )
     if observed_at > now + timedelta(minutes=5):
         raise HTTPException(status_code=422, detail="observed_at cannot be in the future")
     if observed_at < now - timedelta(seconds=settings.evidence_max_observation_age_seconds):

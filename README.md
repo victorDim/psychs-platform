@@ -36,6 +36,8 @@ The new `/api/v2` foundation adds:
 - OCI SBOM/provenance attestations, fixable high/critical image scanning, and keyless Cosign signatures;
 - CodeQL extended security analysis and full-history secret scanning before candidate images are built;
 - dependency-aware startup/readiness and structured request logs.
+- ingress-aligned application request-body limits that reject oversized declared and chunked payloads before route execution.
+- fail-closed, Redis-backed collector rate limits shared across horizontally scaled API replicas.
 
 ## Local verification
 

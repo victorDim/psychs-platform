@@ -46,6 +46,11 @@ before collecting production data.
 
 - Alert on sustained `401`, `403`, `409`, or `422` responses and on ingestion
   lag approaching the configured maximum age.
+- Treat `429` as backpressure and wait for `Retry-After` before retrying. The
+  default shared collector budget is 120 requests per 60 seconds and is
+  configured with `PSYCHS_EVIDENCE_INGEST_RATE_LIMIT` and
+  `PSYCHS_EVIDENCE_INGEST_RATE_WINDOW_SECONDS`. A Redis outage intentionally
+  fails ingestion closed with `503`; do not bypass the limiter.
 - Correlate provider request IDs, Psychs request IDs, and content hashes, but
   never log bearer tokens or provider credentials.
 - Sample provider responses against their stored hashes and source request IDs.

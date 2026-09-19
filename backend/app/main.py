@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .v2.health import dependency_status
 from .v2.observability import request_observability_middleware
+from .v2.request_limits import RequestBodyLimitMiddleware
+from .v2.rate_limit import close_rate_limiter
 from .v2.settings import get_v2_settings
 
 
@@ -35,6 +37,8 @@ if origins:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
     )
+
+app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=settings.max_request_body_bytes)
 
 
 @app.middleware("http")
@@ -98,6 +102,11 @@ if settings.v2_enabled:
 from .v2.telemetry import configure_telemetry
 
 configure_telemetry(app, settings, VERSION)
+
+
+@app.on_event("shutdown")
+async def close_runtime_clients():
+    await close_rate_limiter()
 
 
 if (

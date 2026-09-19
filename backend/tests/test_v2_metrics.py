@@ -38,6 +38,15 @@ def test_http_metrics_use_route_templates_and_bounded_method(monkeypatch):
     assert histogram.calls[0][0] == 12.5
 
 
+def test_api_protection_metrics_bound_labels(monkeypatch):
+    counter = _Instrument()
+    monkeypatch.setattr(platform_metrics, "API_PROTECTION_EVENTS", counter)
+    platform_metrics.record_api_protection_event("attacker-controlled", "unexpected")
+    assert counter.calls == [
+        (1, {"protection.control": "other", "protection.outcome": "other"})
+    ]
+
+
 def test_metrics_endpoint_is_derived_from_trace_endpoint():
     settings = V2Settings(
         _env_file=None,
