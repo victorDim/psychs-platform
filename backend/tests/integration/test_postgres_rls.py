@@ -304,6 +304,14 @@ def test_worker_claim_retry_and_dead_letter_are_durable():
             assert sorted(outcome for outcome, in cursor.fetchall()) == ["dead_letter", "retry", "running", "running"]
             cursor.execute("SELECT count(*) FROM job_dead_letters WHERE job_id = %s", (job_id,))
             assert cursor.fetchone()[0] == 1
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction():
+                    cursor.execute("DELETE FROM job_attempts WHERE job_id = %s", (job_id,))
+
+    # The table owner bypasses grants, so this separately proves the immutable
+    # history trigger protects records even from privileged maintenance paths.
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
             with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
                 with connection.transaction():
                     cursor.execute("DELETE FROM job_attempts WHERE job_id = %s", (job_id,))
