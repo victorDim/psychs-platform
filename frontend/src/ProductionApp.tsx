@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Database, ExternalLink, FolderPlus, LoaderCircle, Plus, ShieldCheck } from 'lucide-react';
 
 import { AuthSessionControl, useAuthentication } from './auth/AuthGate';
@@ -20,8 +20,13 @@ export const ProductionApp: React.FC = () => {
   const { user } = useAuthentication();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
-  const [sources, setSources] = useState<AuthoritativeSource[]>([]);
-  const [observations, setObservations] = useState<EvidenceObservation[]>([]);
+  const [projectData, setProjectData] = useState<{
+    projectId: string; sources: AuthoritativeSource[]; observations: EvidenceObservation[];
+  }>({ projectId: '', sources: [], observations: [] });
+  const sources = projectData.projectId === selectedProjectId ? projectData.sources : [];
+  const observations = projectData.projectId === selectedProjectId ? projectData.observations : [];
+  const loadGeneration = useRef(0);
+  const activeProjectRef = useRef('');
   const [retentionEvents, setRetentionEvents] = useState<EvidenceRetentionEvent[]>([]);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,9 +62,11 @@ export const ProductionApp: React.FC = () => {
   }, []);
 
   const loadSources = useCallback(async (projectId: string) => {
+    // Completion callbacks from an unmounted project must not replace its successor's data.
+    if (projectId !== activeProjectRef.current) return;
+    const generation = ++loadGeneration.current;
     if (!projectId) {
-      setSources([]);
-      setObservations([]);
+      setProjectData({ projectId, sources: [], observations: [] });
       return;
     }
     setError(null);
@@ -68,14 +75,19 @@ export const ProductionApp: React.FC = () => {
         v2Api.listSources(projectId),
         v2Api.listEvidence(projectId),
       ]);
-      setSources(sourceRecords);
-      setObservations(evidenceRecords);
+      if (generation === loadGeneration.current) {
+        setProjectData({ projectId, sources: sourceRecords, observations: evidenceRecords });
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load project evidence');
+      if (generation === loadGeneration.current) setError(reason instanceof Error ? reason.message : 'Unable to load project evidence');
     }
   }, []);
 
-  useEffect(() => { void loadSources(selectedProjectId); }, [loadSources, selectedProjectId]);
+  useEffect(() => {
+    activeProjectRef.current = selectedProjectId;
+    void loadSources(selectedProjectId);
+    return () => { loadGeneration.current += 1; activeProjectRef.current = ''; };
+  }, [loadSources, selectedProjectId]);
 
   const refreshVerifiedProject = useCallback(async (projectId: string) => {
     const [projectRecords] = await Promise.all([
@@ -112,7 +124,9 @@ export const ProductionApp: React.FC = () => {
     setError(null);
     try {
       const updated = await v2Api.updateSnapshotPolicy(source.project_id, source.id, policy);
-      setSources((current) => current.map((record) => record.id === updated.id ? updated : record));
+      setProjectData((current) => current.projectId === updated.project_id
+        ? { ...current, sources: current.sources.map((record) => record.id === updated.id ? updated : record) }
+        : current);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to update capture policy');
     } finally {
@@ -157,6 +171,7 @@ export const ProductionApp: React.FC = () => {
               onVerified={() => refreshVerifiedProject(selectedProject.id)}
             />}
             <EvidenceCollectionPanel
+              key={selectedProjectId}
               projectId={selectedProjectId}
               canCollect={canWriteProjects}
               onEvidenceUpdated={() => loadSources(selectedProjectId)}
@@ -192,7 +207,7 @@ export const ProductionApp: React.FC = () => {
               <button disabled={saving} className="w-full rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{saving ? 'Registering…' : 'Register authoritative source'}</button>
               </form> : <section className="h-fit rounded-2xl border border-slate-800 bg-slate-900/60 p-6"><h2 className="font-semibold">Read-only access</h2><p className="mt-2 text-sm text-slate-400">Your current role can inspect sources and evidence but cannot register new sources.</p></section>}
             </div>
-            <SourceSnapshotsPanel projectId={selectedProjectId} sources={sources} canCapture={canWriteProjects} />
+            <SourceSnapshotsPanel key={selectedProjectId} projectId={selectedProjectId} sources={sources} canCapture={canWriteProjects} />
             <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <h2 className="font-semibold">Observed AI evidence</h2>

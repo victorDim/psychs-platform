@@ -30,18 +30,28 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
   sources,
   canCapture,
 }) => {
-  const verifiedSources = sources.filter((source) => source.verification_status === 'verified' && source.snapshot_policy !== 'disabled');
   const [sourceId, setSourceId] = useState('');
+  const activeSourceId = sources.some((source) => source.id === sourceId)
+    ? sourceId : sources[0]?.id || '';
+  return <SourceSnapshotScope key={`${projectId}:${activeSourceId}`} projectId={projectId}
+    sources={sources} canCapture={canCapture} activeSourceId={activeSourceId} onSourceChange={setSourceId} />;
+};
+
+const SourceSnapshotScope: React.FC<SourceSnapshotsPanelProps & {
+  activeSourceId: string;
+  onSourceChange: (sourceId: string) => void;
+}> = ({ projectId, sources, canCapture, activeSourceId, onSourceChange }) => {
   const [snapshots, setSnapshots] = useState<SourceSnapshotHistory[]>([]);
   const [detail, setDetail] = useState<SourceSnapshotDetail | null>(null);
   const [job, setJob] = useState<ProductionJob | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const completedJob = useRef<string | null>(null);
-
-  const activeSourceId = verifiedSources.some((source) => source.id === sourceId)
-    ? sourceId
-    : verifiedSources[0]?.id || '';
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const detailRequest = useRef(0);
+  const activeSource = sources.find((source) => source.id === activeSourceId);
+  const eligible = activeSource?.verification_status === 'verified' && activeSource.snapshot_policy !== 'disabled';
 
   useEffect(() => {
     if (!activeSourceId) {
@@ -62,14 +72,24 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
   useEffect(() => {
     if (!job || TERMINAL_STATUSES.has(job.status)) return;
     let cancelled = false;
-    const timer = window.setTimeout(async () => {
+    let failures = 0;
+    let timer: number;
+    const poll = async () => {
       try {
         const updated = await v2Api.getJob(job.id);
-        if (!cancelled) setJob(updated);
+        if (!cancelled) { setJob(updated); setError(null); }
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Unable to refresh snapshot status');
+        if (!cancelled) {
+          setError(reason instanceof Error ? reason.message : 'Unable to refresh snapshot status');
+          // Terminal authorization/not-found errors need user action, not repeated polling.
+          if (!(reason instanceof ApiError && [401, 403, 404].includes(reason.status))) {
+            failures += 1;
+            timer = window.setTimeout(poll, Math.min(5_000 * 2 ** Math.min(failures - 1, 3), 30_000));
+          }
+        }
       }
-    }, 2_000);
+    };
+    timer = window.setTimeout(poll, 2_000);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [job]);
 
@@ -88,7 +108,9 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
   }, [activeSourceId, projectId]);
 
   const capture = async () => {
-    if (!activeSourceId) return;
+    if (!activeSourceId || !eligible || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
     setError(null);
     try {
       const created = await v2Api.enqueueSourceSnapshot(projectId, activeSourceId);
@@ -100,15 +122,21 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
       } else {
         setError(reason instanceof Error ? reason.message : 'Unable to start source capture');
       }
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
   const viewDetail = async (snapshot: SourceSnapshot) => {
+    const requestId = ++detailRequest.current;
+    setDetail(null);
     setError(null);
     try {
-      setDetail(await v2Api.getSourceSnapshot(projectId, snapshot.source_id, snapshot.id));
+      const result = await v2Api.getSourceSnapshot(projectId, snapshot.source_id, snapshot.id);
+      if (requestId === detailRequest.current) setDetail(result);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load the stored snapshot');
+      if (requestId === detailRequest.current) setError(reason instanceof Error ? reason.message : 'Unable to load the stored snapshot');
     }
   };
 
@@ -121,21 +149,22 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
         </div>
         <span className="inline-flex items-center gap-1 rounded-full border border-indigo-900 px-3 py-1 text-xs text-indigo-300"><ShieldCheck className="h-3 w-3" /> DNS-pinned fetch</span>
       </div>
-      {verifiedSources.length === 0 ? (
-        <p className="mt-4 text-sm text-slate-500">Verify the project domain and register an eligible source before capturing snapshots.</p>
+      {sources.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-500">Register a source to view its capture history.</p>
       ) : (
         <div className="mt-4">
           <div className="flex flex-wrap items-end gap-3">
-            <label className="min-w-64 flex-1 text-xs text-slate-400">Verified source
-              <select value={activeSourceId} onChange={(event) => setSourceId(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
-                {verifiedSources.map((source) => <option key={source.id} value={source.id}>{source.owner_label} · {source.canonical_url}</option>)}
+            <label className="min-w-64 flex-1 text-xs text-slate-400">Source history
+              <select value={activeSourceId} onChange={(event) => onSourceChange(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                {sources.map((source) => <option key={source.id} value={source.id}>{source.owner_label} · {source.canonical_url}</option>)}
               </select>
             </label>
-            {canCapture ? <button type="button" onClick={capture} disabled={Boolean(job && !TERMINAL_STATUSES.has(job.status))} className="inline-flex items-center gap-2 rounded-lg bg-indigo-300 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-indigo-200 disabled:cursor-not-allowed disabled:opacity-60">
+            {canCapture ? <button type="button" onClick={capture} disabled={submitting || !eligible || Boolean(job && !TERMINAL_STATUSES.has(job.status))} className="inline-flex items-center gap-2 rounded-lg bg-indigo-300 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-indigo-200 disabled:cursor-not-allowed disabled:opacity-60">
               {job && !TERMINAL_STATUSES.has(job.status) ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-              Capture current source
+              {submitting ? 'Queueing capture…' : 'Capture current source'}
             </button> : null}
           </div>
+          {!eligible ? <p className="mt-3 text-xs text-slate-400">New captures require a verified source with capture enabled. Retained history remains available.</p> : null}
           {error ? <div role="alert" className="mt-4 rounded-xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div> : null}
           {job ? <div aria-live="polite" className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm"><p className="font-medium">Capture {job.status.replace('_', ' ')}</p><p className="mt-1 font-mono text-xs text-slate-500">Job {job.id} · attempt {job.attempt_count}/{job.max_attempts}</p>{job.last_error ? <p className="mt-2 text-xs text-red-300">{job.last_error}</p> : null}</div> : null}
           <div className="mt-4 space-y-3">
