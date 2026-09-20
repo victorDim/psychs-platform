@@ -56,6 +56,15 @@ class V2Settings(BaseSettings):
     evidence_collection_rate_window_seconds: int = Field(
         default=3600, ge=60, le=86400, validation_alias="PSYCHS_EVIDENCE_COLLECTION_RATE_WINDOW_SECONDS"
     )
+    source_snapshots_enabled: bool = Field(
+        default=False, validation_alias="PSYCHS_SOURCE_SNAPSHOTS_ENABLED"
+    )
+    source_snapshot_rate_limit: int = Field(
+        default=30, ge=1, le=1000, validation_alias="PSYCHS_SOURCE_SNAPSHOT_RATE_LIMIT"
+    )
+    source_snapshot_rate_window_seconds: int = Field(
+        default=3600, ge=60, le=86400, validation_alias="PSYCHS_SOURCE_SNAPSHOT_RATE_WINDOW_SECONDS"
+    )
     database_pool_size: int = Field(default=10, ge=1, le=100, validation_alias="DATABASE_POOL_SIZE")
     database_pool_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DATABASE_POOL_OVERFLOW")
     otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")

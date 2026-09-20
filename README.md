@@ -112,6 +112,8 @@ Before production promotion, all of the following are mandatory:
 
 Production collectors must follow [the observed evidence collector contract](docs/runbooks/evidence-collector.md). The current ledger intentionally accepts only observed records; inferred and synthetic data require separate, explicitly labeled pipelines before they may appear in the production UI.
 
+Verified source capture must follow [the source snapshot runbook](docs/runbooks/source-snapshots.md), including outbound network isolation, DNS-rebinding tests, immutable hashes, and retention receipts before the feature gate is enabled.
+
 Provision the first real tenant administrator with the guarded [tenant bootstrap runbook](docs/runbooks/tenant-bootstrap.md). Psychs does not trust token claims to create tenants or privileged memberships automatically.
 
 The detailed audit, PRD, and architectural roadmap are maintained as project planning artifacts outside this repository working tree.

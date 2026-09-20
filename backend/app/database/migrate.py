@@ -95,6 +95,11 @@ def provision_application_role(owner_url: str, role: str, password: str) -> None
             cursor.execute(
                 sql.SQL("GRANT SELECT ON evidence_retention_events TO {}").format(sql.Identifier(role))
             )
+            cursor.execute(
+                sql.SQL("GRANT SELECT ON source_snapshots, source_snapshot_retention_events TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
 
 
 def provision_worker_role(owner_url: str, role: str, password: str) -> None:
@@ -133,7 +138,7 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
             )
             cursor.execute(
                 sql.SQL(
-                    "GRANT SELECT (id, tenant_id, project_id, canonical_url, verification_status) "
+                    "GRANT SELECT (id, tenant_id, project_id, canonical_url, verification_status, snapshot_policy) "
                     "ON authoritative_sources TO {}"
                 ).format(sql.Identifier(role))
             )
@@ -159,6 +164,17 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
             cursor.execute(
                 sql.SQL(
                     "GRANT EXECUTE ON FUNCTION purge_expired_evidence(INTEGER, VARCHAR) TO {}"
+                ).format(sql.Identifier(role))
+            )
+            cursor.execute(sql.SQL("GRANT INSERT ON source_snapshots TO {}").format(sql.Identifier(role)))
+            cursor.execute(
+                sql.SQL("GRANT SELECT (id, collection_job_id, content_sha256) ON source_snapshots TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            cursor.execute(
+                sql.SQL(
+                    "GRANT EXECUTE ON FUNCTION purge_expired_source_snapshots(INTEGER, VARCHAR) TO {}"
                 ).format(sql.Identifier(role))
             )
 

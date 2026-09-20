@@ -7,6 +7,7 @@ import ipaddress
 import urllib.parse
 import urllib.request
 import urllib.error
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 MAX_CRAWL_BYTES = 5 * 1024 * 1024
@@ -39,6 +40,15 @@ BLOCKED_IPV6_SUBNETS = [
     ipaddress.ip_network("fe80::/10"),            # Link-Local
     ipaddress.ip_network("ff00::/8"),             # Multicast
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedPublicTarget:
+    """A URL target whose addresses were resolved and validated together."""
+
+    hostname: str
+    port: int
+    addresses: tuple[str, ...]
 
 def _blocked_ip_reason(ip_obj: ipaddress._BaseAddress) -> Optional[str]:
     ip_str = str(ip_obj)
@@ -133,6 +143,43 @@ def is_safe_public_url(url_or_domain: str) -> Tuple[bool, str]:
         return False, f"DNS resolution failed ({e})"
     except Exception as e:
         return False, f"SSRF validation error: {str(e)}"
+
+
+def resolve_public_target(url: str) -> ResolvedPublicTarget:
+    """Resolve a URL once and fail closed if any returned address is unsafe.
+
+    Callers performing network I/O must connect to one of ``addresses`` rather
+    than resolving ``hostname`` again. This removes the DNS-rebinding window
+    between validation and connection establishment.
+    """
+    syntax_safe, syntax_reason = validate_public_url_syntax(url)
+    if not syntax_safe:
+        raise ValueError(syntax_reason)
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid or missing hostname in URL")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addr_info = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise OSError(f"Public source DNS resolution failed for {hostname}") from exc
+    addresses: list[str] = []
+    for entry in addr_info:
+        address = entry[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("Public source DNS returned an invalid address") from exc
+        blocked_reason = _blocked_ip_reason(ip_obj)
+        if blocked_reason:
+            raise ValueError(blocked_reason)
+        canonical_address = str(ip_obj)
+        if canonical_address not in addresses:
+            addresses.append(canonical_address)
+    if not addresses:
+        raise OSError(f"Public source DNS resolution failed for {hostname}")
+    return ResolvedPublicTarget(hostname=hostname, port=port, addresses=tuple(addresses))
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):

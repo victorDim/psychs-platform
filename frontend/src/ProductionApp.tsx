@@ -6,6 +6,7 @@ import { ProjectOnboarding } from './components/production/ProjectOnboarding';
 import { DomainVerificationPanel } from './components/production/DomainVerificationPanel';
 import { RetentionHistory } from './components/production/RetentionHistory';
 import { EvidenceCollectionPanel } from './components/production/EvidenceCollectionPanel';
+import { SourceSnapshotsPanel } from './components/production/SourceSnapshotsPanel';
 import {
   type AuthoritativeSource,
   type EvidenceObservation,
@@ -168,6 +169,7 @@ export const ProductionApp: React.FC = () => {
               <button disabled={saving} className="w-full rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{saving ? 'Registering…' : 'Register authoritative source'}</button>
               </form> : <section className="h-fit rounded-2xl border border-slate-800 bg-slate-900/60 p-6"><h2 className="font-semibold">Read-only access</h2><p className="mt-2 text-sm text-slate-400">Your current role can inspect sources and evidence but cannot register new sources.</p></section>}
             </div>
+            <SourceSnapshotsPanel projectId={selectedProjectId} sources={sources} canCapture={canWriteProjects} />
             <section className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <h2 className="font-semibold">Observed AI evidence</h2>

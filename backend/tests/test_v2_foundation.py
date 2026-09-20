@@ -140,6 +140,16 @@ def test_v2_migration_forces_rls_with_write_checks():
     assert "domain_verified_at" in domain_trust
     assert "latest_verified_at" in domain_trust
 
+    snapshots = migrations["0010_source_snapshots.py"]
+    assert 'down_revision = "0009_domain_trust"' in snapshots
+    assert "source_snapshots_tenant_isolation" in snapshots
+    assert "source_snapshots_immutable" in snapshots
+    assert "fk_snapshot_tenant_source" in snapshots
+    assert "uq_source_snapshot_job" in snapshots
+    assert "FOR UPDATE SKIP LOCKED" in snapshots
+    assert "SECURITY DEFINER" in snapshots
+    assert "REVOKE ALL ON FUNCTION purge_expired_source_snapshots" in snapshots
+
     for migration_name, migration in migrations.items():
         module = ast.parse(migration)
         revision = next(

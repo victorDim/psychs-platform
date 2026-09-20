@@ -79,6 +79,7 @@ class AuthoritativeSource(Base):
             name="fk_source_tenant_project",
             ondelete="CASCADE",
         ),
+        UniqueConstraint("tenant_id", "id", name="uq_sources_tenant_id"),
         UniqueConstraint("tenant_id", "project_id", "canonical_url", name="uq_source_project_url"),
         Index("ix_sources_tenant_project", "tenant_id", "project_id"),
     )
@@ -327,5 +328,65 @@ class EvidenceRetentionEvent(Base):
     retention_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     oldest_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     newest_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    executor: Mapped[str] = mapped_column(String(128), nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SourceSnapshot(Base):
+    __tablename__ = "source_snapshots"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"], ["projects.tenant_id", "projects.id"],
+            name="fk_snapshot_tenant_project", ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id"], ["authoritative_sources.tenant_id", "authoritative_sources.id"],
+            name="fk_snapshot_tenant_source", ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "collection_job_id"], ["jobs.tenant_id", "jobs.id"],
+            name="fk_snapshot_collection_job", ondelete="RESTRICT",
+        ),
+        UniqueConstraint("tenant_id", "collection_job_id", name="uq_source_snapshot_job"),
+        Index(
+            "ix_source_snapshots_tenant_source_fetched",
+            "tenant_id", "project_id", "source_id", "fetched_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    collection_job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    requested_url: Mapped[str] = mapped_column(Text, nullable=False)
+    final_url: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    charset: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SourceSnapshotRetentionEvent(Base):
+    __tablename__ = "source_snapshot_retention_events"
+    __table_args__ = (
+        Index("ix_source_snapshot_retention_events_tenant_executed", "tenant_id", "executed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    deleted_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    retention_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    oldest_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    newest_fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     executor: Mapped[str] = mapped_column(String(128), nullable=False)
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

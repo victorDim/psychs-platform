@@ -30,6 +30,7 @@ from .models import (
     Job,
     Project,
     RevokedAccessToken,
+    SourceSnapshot,
 )
 from .metrics import record_api_protection_event
 from .policy import INGEST_EVIDENCE, MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJECTS
@@ -148,7 +149,7 @@ class JobResponse(BaseModel):
 
     id: UUID
     project_id: UUID
-    job_type: Literal["domain_verification", "evidence_collection"]
+    job_type: Literal["domain_verification", "evidence_collection", "source_snapshot"]
     status: Literal["queued", "running", "retry_wait", "succeeded", "dead_letter", "cancelled"]
     priority: int
     result: Optional[dict]
@@ -161,6 +162,29 @@ class JobResponse(BaseModel):
     updated_at: datetime
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
+
+
+class SourceSnapshotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    source_id: UUID
+    collection_job_id: UUID
+    requested_url: str
+    final_url: str
+    http_status: int
+    content_type: str
+    charset: str
+    byte_length: int
+    content_sha256: str
+    fetched_at: datetime
+    retention_expires_at: datetime
+    created_at: datetime
+
+
+class SourceSnapshotDetailResponse(SourceSnapshotResponse):
+    body_text: str
 
 
 class TokenRevocationCreate(BaseModel):
@@ -481,6 +505,158 @@ async def create_authoritative_source(
         },
     ))
     return source
+
+
+async def _tenant_source(
+    session: AsyncSession,
+    context: RequestContext,
+    project_id: UUID,
+    source_id: UUID,
+) -> AuthoritativeSource:
+    await _tenant_project(session, context, project_id)
+    source = (
+        await session.execute(
+            select(AuthoritativeSource).where(
+                AuthoritativeSource.tenant_id == context.tenant_id,
+                AuthoritativeSource.project_id == project_id,
+                AuthoritativeSource.id == source_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail="Authoritative source not found")
+    return source
+
+
+@router.post(
+    "/projects/{project_id}/sources/{source_id}/snapshot-jobs",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def enqueue_source_snapshot_job(
+    project_id: UUID,
+    source_id: UUID,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=16, max_length=255),
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, human_only=True)),
+    session: AsyncSession = Depends(get_session),
+):
+    settings = get_v2_settings()
+    if not settings.source_snapshots_enabled:
+        raise HTTPException(status_code=503, detail="Source snapshots are not enabled")
+    source = await _tenant_source(session, context, project_id, source_id)
+    if source.verification_status != "verified":
+        raise HTTPException(status_code=409, detail="Only verified sources can be captured")
+    if source.snapshot_policy == "disabled":
+        raise HTTPException(status_code=409, detail="Snapshots are disabled for this source")
+    try:
+        rate_decision = await get_rate_limiter().check(
+            context,
+            "source-snapshot",
+            limit=settings.source_snapshot_rate_limit,
+            window_seconds=settings.source_snapshot_rate_window_seconds,
+        )
+    except RateLimitUnavailable as exc:
+        record_api_protection_event("rate_limit", "unavailable")
+        raise HTTPException(status_code=503, detail="Source capture is temporarily unavailable") from exc
+    if not rate_decision.allowed:
+        record_api_protection_event("rate_limit", "rejected")
+        raise HTTPException(
+            status_code=429,
+            detail="Source snapshot rate limit exceeded",
+            headers={"Retry-After": str(rate_decision.retry_after_seconds), "X-RateLimit-Remaining": "0"},
+        )
+
+    request_hash = hashlib.sha256(f"{project_id}:{source_id}".encode("utf-8")).hexdigest()
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": f"{context.tenant_id}:source_snapshot:{idempotency_key}"},
+    )
+    existing = (
+        await session.execute(
+            select(Job).where(
+                Job.tenant_id == context.tenant_id,
+                Job.job_type == "source_snapshot",
+                Job.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        if existing.request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="Idempotency key reused with different input")
+        return existing
+
+    job = Job(
+        tenant_id=context.tenant_id,
+        project_id=project_id,
+        job_type="source_snapshot",
+        priority=35,
+        payload={"source_id": str(source_id)},
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        max_attempts=3,
+        created_by=context.principal_id,
+    )
+    session.add(job)
+    await session.flush()
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id,
+        actor_user_id=context.principal_id,
+        request_id=context.request_id,
+        action="job.enqueued",
+        resource_type="job",
+        resource_id=job.id,
+        payload={"job_type": job.job_type, "project_id": str(project_id), "source_id": str(source_id)},
+    ))
+    return job
+
+
+@router.get(
+    "/projects/{project_id}/sources/{source_id}/snapshots",
+    response_model=list[SourceSnapshotResponse],
+)
+async def list_source_snapshots(
+    project_id: UUID,
+    source_id: UUID,
+    limit: int = 25,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    await _tenant_source(session, context, project_id, source_id)
+    result = await session.execute(
+        select(SourceSnapshot).where(
+            SourceSnapshot.tenant_id == context.tenant_id,
+            SourceSnapshot.project_id == project_id,
+            SourceSnapshot.source_id == source_id,
+        ).order_by(SourceSnapshot.fetched_at.desc()).limit(min(max(limit, 1), 100))
+    )
+    return result.scalars().all()
+
+
+@router.get(
+    "/projects/{project_id}/sources/{source_id}/snapshots/{snapshot_id}",
+    response_model=SourceSnapshotDetailResponse,
+)
+async def get_source_snapshot(
+    project_id: UUID,
+    source_id: UUID,
+    snapshot_id: UUID,
+    context: RequestContext = Depends(require_permission(VIEW_PROJECTS)),
+    session: AsyncSession = Depends(get_session),
+):
+    await _tenant_source(session, context, project_id, source_id)
+    snapshot = (
+        await session.execute(
+            select(SourceSnapshot).where(
+                SourceSnapshot.tenant_id == context.tenant_id,
+                SourceSnapshot.project_id == project_id,
+                SourceSnapshot.source_id == source_id,
+                SourceSnapshot.id == snapshot_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Source snapshot not found")
+    return snapshot
 
 
 @router.get(
@@ -1030,7 +1206,7 @@ async def cancel_job(
     if job.status in {"queued", "retry_wait"}:
         job.status = "cancelled"
         job.completed_at = now
-        if job.job_type == "evidence_collection":
+        if job.job_type in {"evidence_collection", "source_snapshot"}:
             job.payload = {}
     session.add(AuditEvent(
         tenant_id=context.tenant_id,

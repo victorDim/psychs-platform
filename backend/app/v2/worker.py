@@ -33,6 +33,11 @@ from .provider_collection import (
     ProviderTemporaryError,
     collect_openai_response,
 )
+from .source_snapshot import (
+    SourceSnapshotPermanentError,
+    SourceSnapshotTemporaryError,
+    fetch_source_snapshot,
+)
 from .telemetry import configure_worker_metrics, shutdown_metrics
 
 
@@ -64,6 +69,10 @@ class WorkerSettings:
     openai_model: str = "gpt-5"
     openai_timeout_seconds: int = 30
     openai_max_output_tokens: int = 2048
+    source_snapshots_enabled: bool = False
+    source_snapshot_timeout_seconds: int = 10
+    source_snapshot_max_bytes: int = 1_048_576
+    source_snapshot_retention_days: int = 90
 
     @classmethod
     def from_environment(cls) -> "WorkerSettings":
@@ -78,6 +87,11 @@ class WorkerSettings:
         ).strip().lower()
         if collection_enabled_raw not in {"true", "false"}:
             raise RuntimeError("PSYCHS_EVIDENCE_COLLECTION_ENABLED must be true or false")
+        snapshots_enabled_raw = os.environ.get(
+            "PSYCHS_SOURCE_SNAPSHOTS_ENABLED", "false"
+        ).strip().lower()
+        if snapshots_enabled_raw not in {"true", "false"}:
+            raise RuntimeError("PSYCHS_SOURCE_SNAPSHOTS_ENABLED must be true or false")
         trace_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip().rstrip("/")
         metrics_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "").strip()
         if not metrics_endpoint and trace_endpoint:
@@ -113,6 +127,16 @@ class WorkerSettings:
             openai_max_output_tokens=int(
                 os.environ.get("PSYCHS_OPENAI_MAX_OUTPUT_TOKENS", "2048")
             ),
+            source_snapshots_enabled=snapshots_enabled_raw == "true",
+            source_snapshot_timeout_seconds=int(
+                os.environ.get("PSYCHS_SOURCE_SNAPSHOT_TIMEOUT_SECONDS", "10")
+            ),
+            source_snapshot_max_bytes=int(
+                os.environ.get("PSYCHS_SOURCE_SNAPSHOT_MAX_BYTES", "1048576")
+            ),
+            source_snapshot_retention_days=int(
+                os.environ.get("PSYCHS_SOURCE_SNAPSHOT_RETENTION_DAYS", "90")
+            ),
         )
         if not 15 <= settings.lease_seconds <= 3600:
             raise RuntimeError("PSYCHS_JOB_LEASE_SECONDS must be between 15 and 3600")
@@ -145,6 +169,14 @@ class WorkerSettings:
                 raise RuntimeError("OpenAI timeout must be shorter than the worker lease")
             if not 64 <= settings.openai_max_output_tokens <= 8192:
                 raise RuntimeError("PSYCHS_OPENAI_MAX_OUTPUT_TOKENS must be between 64 and 8192")
+        if not 5 <= settings.source_snapshot_timeout_seconds <= 120:
+            raise RuntimeError("PSYCHS_SOURCE_SNAPSHOT_TIMEOUT_SECONDS must be between 5 and 120")
+        if settings.source_snapshot_timeout_seconds >= settings.lease_seconds:
+            raise RuntimeError("Source snapshot timeout must be shorter than the worker lease")
+        if not 65_536 <= settings.source_snapshot_max_bytes <= 5_242_880:
+            raise RuntimeError("PSYCHS_SOURCE_SNAPSHOT_MAX_BYTES must be between 65536 and 5242880")
+        if not 1 <= settings.source_snapshot_retention_days <= 2555:
+            raise RuntimeError("PSYCHS_SOURCE_SNAPSHOT_RETENTION_DAYS must be between 1 and 2555")
         if settings.otel_enabled and not settings.otel_metrics_endpoint:
             raise RuntimeError("An OTLP endpoint is required when OTEL_ENABLED is true")
         if (
@@ -173,11 +205,16 @@ def retry_delay_seconds(attempt_number: int, base_seconds: int, cap_seconds: int
 
 
 def _safe_job_error(job: ClaimedJob, error: Exception) -> str:
-    if job.job_type != "evidence_collection":
+    if job.job_type not in {"evidence_collection", "source_snapshot"}:
+        return f"{type(error).__name__}: {error}"[:2000]
+    if job.job_type == "source_snapshot" and isinstance(
+        error, (SourceSnapshotPermanentError, RetryableJobError, ValueError)
+    ):
         return f"{type(error).__name__}: {error}"[:2000]
     if isinstance(error, (ProviderPermanentError, RetryableJobError, ValueError)):
         return f"{type(error).__name__}: {error}"[:2000]
-    return f"{type(error).__name__}: Evidence collection failed internally"
+    operation = "Source snapshot" if job.job_type == "source_snapshot" else "Evidence collection"
+    return f"{type(error).__name__}: {operation} failed internally"
 
 
 def _record_event(
@@ -215,7 +252,7 @@ def _reap_exhausted_leases(connection: psycopg.Connection, worker_id: str) -> in
             cursor.execute(
                 """
                 UPDATE jobs SET status = 'dead_letter', last_error = %s, completed_at = now(),
-                    payload = CASE WHEN job_type = 'evidence_collection' THEN '{}'::jsonb ELSE payload END,
+                    payload = CASE WHEN job_type IN ('evidence_collection', 'source_snapshot') THEN '{}'::jsonb ELSE payload END,
                     lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
                 WHERE id = %s AND status = 'running'
                 """,
@@ -257,7 +294,7 @@ def claim_next_job(connection: psycopg.Connection, settings: WorkerSettings) -> 
                 started_at = CASE WHEN cancellation_requested_at IS NULL THEN COALESCE(started_at, now()) ELSE started_at END,
                 completed_at = CASE WHEN cancellation_requested_at IS NULL THEN NULL ELSE now() END,
                 payload = CASE
-                    WHEN cancellation_requested_at IS NOT NULL AND job_type = 'evidence_collection'
+                    WHEN cancellation_requested_at IS NOT NULL AND job_type IN ('evidence_collection', 'source_snapshot')
                     THEN '{}'::jsonb ELSE payload END,
                 updated_at = now()
             FROM candidate WHERE job.id = candidate.id
@@ -297,7 +334,7 @@ def complete_job(
             UPDATE jobs SET
                 status = CASE WHEN cancellation_requested_at IS NULL THEN 'succeeded' ELSE 'cancelled' END,
                 result = CASE WHEN cancellation_requested_at IS NULL THEN %s ELSE NULL END,
-                payload = CASE WHEN job_type = 'evidence_collection' THEN '{}'::jsonb ELSE payload END,
+                payload = CASE WHEN job_type IN ('evidence_collection', 'source_snapshot') THEN '{}'::jsonb ELSE payload END,
                 lease_owner = NULL, lease_expires_at = NULL, completed_at = now(), updated_at = now()
             WHERE id = %s AND status = 'running' AND lease_owner = %s
             RETURNING status
@@ -335,7 +372,7 @@ def fail_job(
                     THEN now() + make_interval(secs => %s) ELSE available_at END,
                 completed_at = CASE WHEN cancellation_requested_at IS NULL AND %s THEN NULL ELSE now() END,
                 payload = CASE
-                    WHEN job_type = 'evidence_collection'
+                    WHEN job_type IN ('evidence_collection', 'source_snapshot')
                          AND (cancellation_requested_at IS NOT NULL OR NOT %s)
                     THEN '{}'::jsonb ELSE payload END,
                 lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
@@ -547,6 +584,109 @@ def execute_evidence_collection(
     }
 
 
+def execute_source_snapshot(
+    connection: psycopg.Connection,
+    job: ClaimedJob,
+    settings: WorkerSettings,
+    *,
+    fetcher=fetch_source_snapshot,
+) -> dict:
+    raw_source_id = job.payload.get("source_id")
+    try:
+        source_id = UUID(raw_source_id) if isinstance(raw_source_id, str) else None
+    except ValueError as exc:
+        raise ValueError("Source snapshot payload is invalid") from exc
+    if source_id is None:
+        raise ValueError("Source snapshot payload is invalid")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT id, content_sha256 FROM source_snapshots WHERE collection_job_id = %s",
+            (job.id,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            return {
+                "snapshot_id": str(existing["id"]),
+                "content_sha256": existing["content_sha256"],
+                "deduplicated": True,
+            }
+        cursor.execute(
+            """SELECT canonical_url, verification_status, snapshot_policy
+               FROM authoritative_sources
+               WHERE tenant_id = %s AND project_id = %s AND id = %s""",
+            (job.tenant_id, job.project_id, source_id),
+        )
+        source = cursor.fetchone()
+    if source is None:
+        raise SourceSnapshotPermanentError("Authoritative source no longer exists")
+    if source["verification_status"] != "verified":
+        raise SourceSnapshotPermanentError("Authoritative source is not verified")
+    if source["snapshot_policy"] == "disabled":
+        raise SourceSnapshotPermanentError("Snapshots are disabled for this source")
+
+    try:
+        response = fetcher(
+            source["canonical_url"],
+            timeout_seconds=settings.source_snapshot_timeout_seconds,
+            max_bytes=settings.source_snapshot_max_bytes,
+        )
+    except SourceSnapshotTemporaryError as exc:
+        raise RetryableJobError(str(exc)) from exc
+
+    fetched_at = datetime.now(timezone.utc)
+    content_sha256 = hashlib.sha256(response.body).hexdigest()
+    body_text = response.body.decode(response.charset)
+    snapshot_id = uuid4()
+    with connection.transaction(), connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO source_snapshots (
+                id, tenant_id, project_id, source_id, collection_job_id,
+                requested_url, final_url, http_status, content_type, charset,
+                byte_length, content_sha256, body_text, fetched_at, retention_expires_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, now() + make_interval(days => %s)
+            )
+            """,
+            (
+                snapshot_id,
+                job.tenant_id,
+                job.project_id,
+                source_id,
+                job.id,
+                response.requested_url,
+                response.final_url,
+                response.status_code,
+                response.content_type,
+                response.charset,
+                len(response.body),
+                content_sha256,
+                body_text,
+                fetched_at,
+                settings.source_snapshot_retention_days,
+            ),
+        )
+        _audit(
+            cursor,
+            job,
+            "source_snapshot.created",
+            {
+                "snapshot_id": str(snapshot_id),
+                "source_id": str(source_id),
+                "content_sha256": content_sha256,
+                "byte_length": len(response.body),
+                "final_url": response.final_url,
+            },
+        )
+    return {
+        "snapshot_id": str(snapshot_id),
+        "source_id": str(source_id),
+        "content_sha256": content_sha256,
+        "byte_length": len(response.body),
+    }
+
+
 def run_once(settings: WorkerSettings) -> bool:
     with psycopg.connect(settings.database_url) as connection:
         job = claim_next_job(connection, settings)
@@ -562,6 +702,10 @@ def run_once(settings: WorkerSettings) -> bool:
                 if not settings.evidence_collection_enabled:
                     raise ValueError("Evidence collection is disabled on this worker")
                 result = execute_evidence_collection(connection, job, settings)
+            elif job.job_type == "source_snapshot":
+                if not settings.source_snapshots_enabled:
+                    raise ValueError("Source snapshots are disabled on this worker")
+                result = execute_source_snapshot(connection, job, settings)
             else:
                 raise ValueError(f"Unsupported job type: {job.job_type}")
             persisted_outcome = complete_job(connection, job, settings, result)
@@ -600,6 +744,17 @@ def purge_expired_evidence(settings: WorkerSettings) -> int:
         raise
 
 
+def purge_expired_source_snapshots(settings: WorkerSettings) -> int:
+    """Delete one bounded source-snapshot batch and retain deletion receipts."""
+    with psycopg.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT deleted_count FROM purge_expired_source_snapshots(%s, %s)",
+                (settings.retention_cleanup_batch_size, settings.worker_id),
+            )
+            return sum(row[0] for row in cursor.fetchall())
+
+
 def main() -> None:
     settings = WorkerSettings.from_environment()
     global LOGGER
@@ -632,6 +787,9 @@ def main() -> None:
                     deleted_count = purge_expired_evidence(settings)
                     if deleted_count:
                         LOGGER.info("Expired evidence observations deleted: %s", deleted_count)
+                    deleted_snapshots = purge_expired_source_snapshots(settings)
+                    if deleted_snapshots:
+                        LOGGER.info("Expired source snapshots deleted: %s", deleted_snapshots)
                 if not run_once(settings):
                     time.sleep(settings.poll_seconds)
             except Exception:

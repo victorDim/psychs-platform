@@ -52,6 +52,21 @@ def test_worker_rejects_retention_outside_policy(monkeypatch):
         WorkerSettings.from_environment()
 
 
+def test_worker_rejects_unbounded_source_snapshot_download(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_SOURCE_SNAPSHOT_MAX_BYTES", "5242881")
+    with pytest.raises(RuntimeError, match="SOURCE_SNAPSHOT_MAX_BYTES"):
+        WorkerSettings.from_environment()
+
+
+def test_worker_rejects_snapshot_timeout_beyond_lease(monkeypatch):
+    monkeypatch.setenv("DATABASE_WORKER_URL", "postgresql://worker:secret@database/psychs")
+    monkeypatch.setenv("PSYCHS_JOB_LEASE_SECONDS", "60")
+    monkeypatch.setenv("PSYCHS_SOURCE_SNAPSHOT_TIMEOUT_SECONDS", "60")
+    with pytest.raises(RuntimeError, match="snapshot timeout"):
+        WorkerSettings.from_environment()
+
+
 def test_collection_errors_do_not_expose_database_exception_details():
     identifier = uuid4()
     job = ClaimedJob(
@@ -66,4 +81,15 @@ def test_collection_errors_do_not_expose_database_exception_details():
     )
     sanitized = _safe_job_error(job, RuntimeError("failed row contains customer secret"))
     assert sanitized == "RuntimeError: Evidence collection failed internally"
+    assert "customer secret" not in sanitized
+
+
+def test_snapshot_internal_errors_do_not_expose_response_details():
+    identifier = uuid4()
+    job = ClaimedJob(
+        identifier, identifier, identifier, identifier,
+        "source_snapshot", {"source_id": str(identifier)}, 1, 3,
+    )
+    sanitized = _safe_job_error(job, RuntimeError("response contained customer secret"))
+    assert sanitized == "RuntimeError: Source snapshot failed internally"
     assert "customer secret" not in sanitized

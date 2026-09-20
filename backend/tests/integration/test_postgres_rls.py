@@ -9,11 +9,13 @@ import pytest
 import app.v2.worker as v2_worker
 from app.database.bootstrap_tenant import BootstrapSettings, bootstrap_tenant
 from app.v2.provider_collection import ObservedProviderResponse
+from app.v2.source_snapshot import SourceSnapshotResponse
 from app.v2.worker import (
     ClaimedJob,
     WorkerSettings,
     claim_next_job,
     execute_evidence_collection,
+    execute_source_snapshot,
     fail_job,
 )
 
@@ -626,6 +628,102 @@ def test_worker_collects_real_evidence_once_per_durable_job():
                 "An observed response from the injected provider boundary.",
                 True,
             )
+
+
+def test_worker_captures_verified_source_once_with_immutable_provenance():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, other_tenant, user, _ = _seed_two_tenants()
+    project, source_id, job_id = uuid4(), uuid4(), uuid4()
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO projects
+                       (id, tenant_id, slug, name, canonical_domain, created_by,
+                        domain_verification_status, domain_verified_at)
+                   VALUES (%s, %s, %s, 'Snapshot Project', 'example.com', %s,
+                           'verified', now())""",
+                (project, tenant, f"snapshot-{project.hex[:8]}", user),
+            )
+            cursor.execute(
+                """INSERT INTO authoritative_sources
+                       (id, tenant_id, project_id, canonical_url, source_type,
+                        owner_label, verification_status, created_by)
+                   VALUES (%s, %s, %s, 'https://example.com/docs', 'documentation',
+                           'Documentation', 'verified', %s)""",
+                (source_id, tenant, project, user),
+            )
+            cursor.execute(
+                """INSERT INTO jobs
+                       (id, tenant_id, project_id, job_type, payload, idempotency_key,
+                        request_hash, created_by, max_attempts)
+                   VALUES (%s, %s, %s, 'source_snapshot',
+                           jsonb_build_object('source_id', %s::text),
+                           %s, repeat('a', 64), %s, 3)""",
+                (job_id, tenant, project, source_id, f"idempotency-{job_id}", user),
+            )
+
+    job = ClaimedJob(
+        job_id, tenant, project, user, "source_snapshot", {"source_id": str(source_id)}, 1, 3
+    )
+    settings = WorkerSettings(
+        database_url=WORKER_URL,
+        worker_id=f"snapshot-worker-{job_id.hex[:8]}",
+        source_snapshots_enabled=True,
+        source_snapshot_retention_days=30,
+    )
+    calls = 0
+
+    def observed_fetcher(url, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return SourceSnapshotResponse(
+            requested_url=url,
+            final_url="https://example.com/docs/current",
+            status_code=200,
+            content_type="text/html",
+            charset="utf-8",
+            body=b"<html>observed source</html>",
+        )
+
+    with psycopg.connect(WORKER_URL) as connection:
+        first = execute_source_snapshot(connection, job, settings, fetcher=observed_fetcher)
+        repeated = execute_source_snapshot(connection, job, settings, fetcher=observed_fetcher)
+
+    assert calls == 1
+    assert repeated["snapshot_id"] == first["snapshot_id"]
+    assert repeated["deduplicated"] is True
+    with psycopg.connect(APP_URL) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(cursor, tenant)
+            cursor.execute(
+                """SELECT source_id, collection_job_id, final_url, byte_length,
+                          length(content_sha256), body_text,
+                          retention_expires_at > now() + interval '29 days'
+                   FROM source_snapshots WHERE id = %s""",
+                (first["snapshot_id"],),
+            )
+            assert cursor.fetchone() == (
+                source_id,
+                job_id,
+                "https://example.com/docs/current",
+                len(b"<html>observed source</html>"),
+                64,
+                "<html>observed source</html>",
+                True,
+            )
+            _set_tenant(cursor, other_tenant)
+            cursor.execute("SELECT id FROM source_snapshots WHERE id = %s", (first["snapshot_id"],))
+            assert cursor.fetchone() is None
+
+    with psycopg.connect(OWNER_URL) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+                with connection.transaction():
+                    cursor.execute(
+                        "UPDATE source_snapshots SET body_text = 'tampered' WHERE id = %s",
+                        (first["snapshot_id"],),
+                    )
 
 
 def test_worker_persists_domain_trust_and_promotes_only_owned_sources(monkeypatch):

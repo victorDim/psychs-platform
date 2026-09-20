@@ -115,6 +115,26 @@ spec:
                 configMapKeyRef:
                   name: psychs-config
                   key: PSYCHS_OPENAI_MAX_OUTPUT_TOKENS
+            - name: PSYCHS_SOURCE_SNAPSHOTS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_SOURCE_SNAPSHOTS_ENABLED
+            - name: PSYCHS_SOURCE_SNAPSHOT_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_SOURCE_SNAPSHOT_TIMEOUT_SECONDS
+            - name: PSYCHS_SOURCE_SNAPSHOT_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_SOURCE_SNAPSHOT_MAX_BYTES
+            - name: PSYCHS_SOURCE_SNAPSHOT_RETENTION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  name: psychs-config
+                  key: PSYCHS_SOURCE_SNAPSHOT_RETENTION_DAYS
           resources:
             requests:
               cpu: "100m"

@@ -90,7 +90,7 @@ export interface EvidenceObservation {
 export interface ProductionJob {
   id: string;
   project_id: string;
-  job_type: 'domain_verification' | 'evidence_collection';
+  job_type: 'domain_verification' | 'evidence_collection' | 'source_snapshot';
   status: 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'dead_letter' | 'cancelled';
   priority: number;
   result?: Record<string, unknown>;
@@ -103,6 +103,27 @@ export interface ProductionJob {
   updated_at: string;
   started_at?: string;
   completed_at?: string;
+}
+
+export interface SourceSnapshot {
+  id: string;
+  project_id: string;
+  source_id: string;
+  collection_job_id: string;
+  requested_url: string;
+  final_url: string;
+  http_status: number;
+  content_type: string;
+  charset: string;
+  byte_length: number;
+  content_sha256: string;
+  fetched_at: string;
+  retention_expires_at: string;
+  created_at: string;
+}
+
+export interface SourceSnapshotDetail extends SourceSnapshot {
+  body_text: string;
 }
 
 export interface EvidenceRetentionEvent {
@@ -149,6 +170,15 @@ export const v2Api = {
       body: JSON.stringify({ prompt }),
     }),
   getJob: (jobId: string) => request<ProductionJob>(`/jobs/${encodeURIComponent(jobId)}`),
+  enqueueSourceSnapshot: (projectId: string, sourceId: string) =>
+    request<ProductionJob>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshot-jobs`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    }),
+  listSourceSnapshots: (projectId: string, sourceId: string) =>
+    request<SourceSnapshot[]>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshots`),
+  getSourceSnapshot: (projectId: string, sourceId: string, snapshotId: string) =>
+    request<SourceSnapshotDetail>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(snapshotId)}`),
   createDomainVerificationChallenge: (projectId: string) =>
     request<DomainVerificationChallenge>(`/projects/${encodeURIComponent(projectId)}/domain-verification-challenges`, {
       method: 'POST',
