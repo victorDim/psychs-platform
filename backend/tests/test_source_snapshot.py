@@ -1,6 +1,11 @@
 """Security and bounded-I/O tests for production source snapshots."""
 
 import socket
+import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -11,6 +16,80 @@ from app.v2.source_snapshot import (
     SourceSnapshotTemporaryError,
     fetch_source_snapshot,
 )
+from app.v2.snapshot_changes import classify_snapshot_change
+
+
+def _snapshot(**overrides):
+    values = dict(
+        id=uuid4(), project_id=uuid4(), source_id=uuid4(), collection_job_id=uuid4(),
+        requested_url="https://example.com/", final_url="https://example.com/",
+        content_sha256="a" * 64, http_status=200, content_type="text/html",
+        charset="utf-8", byte_length=10, fetched_at=datetime.now(timezone.utc),
+        retention_expires_at=datetime.now(timezone.utc), created_at=datetime.now(timezone.utc),
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        ({}, "unchanged"),
+        ({"content_sha256": "b" * 64}, "content_changed"),
+        ({"final_url": "https://example.com/new"}, "metadata_changed"),
+        ({"http_status": 203}, "metadata_changed"),
+        ({"content_type": "text/plain"}, "metadata_changed"),
+        ({"charset": "ascii"}, "metadata_changed"),
+        ({"content_sha256": "b" * 64, "http_status": 203}, "content_changed"),
+    ],
+)
+def test_snapshot_changes_distinguish_bytes_from_response_metadata(changes, expected):
+    assert classify_snapshot_change(_snapshot(**changes), _snapshot()) == expected
+
+
+def test_missing_retained_baseline_is_not_reported_as_unchanged():
+    assert classify_snapshot_change(_snapshot(), None) == "baseline_unavailable"
+
+
+def test_history_compares_last_visible_capture_to_extra_row_without_loading_bodies(monkeypatch):
+    from app.v2 import routes
+
+    tenant_id, project_id, source_id = uuid4(), uuid4(), uuid4()
+    current = _snapshot(project_id=project_id, source_id=source_id, content_sha256="b" * 64)
+    previous = _snapshot(project_id=project_id, source_id=source_id)
+    result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [current, previous]))
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    monkeypatch.setattr(routes, "_tenant_source", AsyncMock())
+    history = asyncio.run(routes.list_source_snapshots(
+        project_id, source_id, limit=1,
+        context=SimpleNamespace(tenant_id=tenant_id), session=session,
+    ))
+    assert len(history) == 1
+    assert history[0].change_status == "content_changed"
+    assert history[0].baseline_snapshot_id == previous.id
+    statement = session.execute.call_args.args[0]
+    compiled = statement.compile()
+    assert "body_text" not in str(compiled)
+    assert tenant_id in compiled.params.values()
+    assert project_id in compiled.params.values()
+    assert source_id in compiled.params.values()
+    assert 2 in compiled.params.values()
+    assert "fetched_at DESC, source_snapshots.id DESC" in str(compiled)
+
+
+def test_history_reports_missing_baseline_and_empty_history(monkeypatch):
+    from app.v2 import routes
+
+    monkeypatch.setattr(routes, "_tenant_source", AsyncMock())
+    rows = [_snapshot()]
+    result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    args = dict(project_id=uuid4(), source_id=uuid4(), context=SimpleNamespace(tenant_id=uuid4()), session=session)
+    history = asyncio.run(routes.list_source_snapshots(**args))
+    assert history[0].change_status == "baseline_unavailable"
+    assert history[0].baseline_snapshot_id is None
+    rows.clear()
+    assert asyncio.run(routes.list_source_snapshots(**args)) == []
 
 
 class _Response:

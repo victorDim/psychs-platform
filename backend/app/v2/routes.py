@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.ingestion.ssrf_guard import validate_public_url_syntax
 
@@ -37,6 +38,7 @@ from .policy import INGEST_EVIDENCE, MANAGE_SECURITY, VIEW_PROJECTS, WRITE_PROJE
 from .rate_limit import RateLimitUnavailable, get_rate_limiter
 from .settings import get_v2_settings
 from .repositories import ProjectRepository
+from .snapshot_changes import SnapshotChange, classify_snapshot_change
 
 
 router = APIRouter(prefix="/api/v2", tags=["v2"])
@@ -185,6 +187,11 @@ class SourceSnapshotResponse(BaseModel):
 
 class SourceSnapshotDetailResponse(SourceSnapshotResponse):
     body_text: str
+
+
+class SourceSnapshotHistoryResponse(SourceSnapshotResponse):
+    change_status: SnapshotChange
+    baseline_snapshot_id: Optional[UUID]
 
 
 class TokenRevocationCreate(BaseModel):
@@ -612,7 +619,7 @@ async def enqueue_source_snapshot_job(
 
 @router.get(
     "/projects/{project_id}/sources/{source_id}/snapshots",
-    response_model=list[SourceSnapshotResponse],
+    response_model=list[SourceSnapshotHistoryResponse],
 )
 async def list_source_snapshots(
     project_id: UUID,
@@ -622,14 +629,24 @@ async def list_source_snapshots(
     session: AsyncSession = Depends(get_session),
 ):
     await _tenant_source(session, context, project_id, source_id)
+    page_size = min(max(limit, 1), 100)
     result = await session.execute(
-        select(SourceSnapshot).where(
+        select(SourceSnapshot).options(defer(SourceSnapshot.body_text, raiseload=True)).where(
             SourceSnapshot.tenant_id == context.tenant_id,
             SourceSnapshot.project_id == project_id,
             SourceSnapshot.source_id == source_id,
-        ).order_by(SourceSnapshot.fetched_at.desc()).limit(min(max(limit, 1), 100))
+        ).order_by(SourceSnapshot.fetched_at.desc(), SourceSnapshot.id.desc()).limit(page_size + 1)
     )
-    return result.scalars().all()
+    snapshots = result.scalars().all()
+    history = []
+    for index, snapshot in enumerate(snapshots[:page_size]):
+        previous = snapshots[index + 1] if index + 1 < len(snapshots) else None
+        history.append(SourceSnapshotHistoryResponse(
+            **SourceSnapshotResponse.model_validate(snapshot).model_dump(),
+            change_status=classify_snapshot_change(snapshot, previous),
+            baseline_snapshot_id=previous.id if previous is not None else None,
+        ))
+    return history
 
 
 @router.get(

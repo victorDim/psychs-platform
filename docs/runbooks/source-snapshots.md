@@ -2,6 +2,8 @@
 
 Source snapshots are immutable, tenant-isolated records of bytes fetched from a verified authoritative source. The feature is disabled by default because it creates outbound worker traffic and retained customer data.
 
+The capture history compares each snapshot with the preceding retained snapshot of the same source. A changed SHA-256 digest indicates changed response bytes, including HTML markup; it does not establish a change in factual meaning. Identical bytes with a different final URL, status, content type, or charset are reported as a metadata change. If retention removed the baseline, the UI reports that no earlier retained capture is available. Comparisons load metadata only and never fetch the live source.
+
 ## Staging enablement
 
 1. Apply migration `0010_source_snapshots` and rerun role provisioning. Do not grant the API role direct mutation access to either snapshot table.

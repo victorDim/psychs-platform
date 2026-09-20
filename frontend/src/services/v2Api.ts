@@ -126,6 +126,11 @@ export interface SourceSnapshotDetail extends SourceSnapshot {
   body_text: string;
 }
 
+export interface SourceSnapshotHistory extends SourceSnapshot {
+  change_status: 'baseline_unavailable' | 'unchanged' | 'content_changed' | 'metadata_changed';
+  baseline_snapshot_id: string | null;
+}
+
 export interface EvidenceRetentionEvent {
   id: string;
   deleted_count: number;
@@ -176,7 +181,7 @@ export const v2Api = {
       headers: { 'Idempotency-Key': crypto.randomUUID() },
     }),
   listSourceSnapshots: (projectId: string, sourceId: string) =>
-    request<SourceSnapshot[]>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshots`),
+    request<SourceSnapshotHistory[]>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshots`),
   getSourceSnapshot: (projectId: string, sourceId: string, snapshotId: string) =>
     request<SourceSnapshotDetail>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(snapshotId)}`),
   createDomainVerificationChallenge: (projectId: string) =>

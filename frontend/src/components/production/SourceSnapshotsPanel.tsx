@@ -7,6 +7,7 @@ import {
   type ProductionJob,
   type SourceSnapshot,
   type SourceSnapshotDetail,
+  type SourceSnapshotHistory,
   v2Api,
 } from '../../services/v2Api';
 
@@ -17,6 +18,12 @@ interface SourceSnapshotsPanelProps {
 }
 
 const TERMINAL_STATUSES = new Set<ProductionJob['status']>(['succeeded', 'dead_letter', 'cancelled']);
+const CHANGE_LABELS = {
+  baseline_unavailable: 'No earlier retained capture to compare',
+  unchanged: 'Content and response metadata unchanged',
+  content_changed: 'Source content changed',
+  metadata_changed: 'Response metadata changed; content unchanged',
+} satisfies Record<SourceSnapshotHistory['change_status'], string>;
 
 export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
   projectId,
@@ -25,7 +32,7 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
 }) => {
   const verifiedSources = sources.filter((source) => source.verification_status === 'verified' && source.snapshot_policy !== 'disabled');
   const [sourceId, setSourceId] = useState('');
-  const [snapshots, setSnapshots] = useState<SourceSnapshot[]>([]);
+  const [snapshots, setSnapshots] = useState<SourceSnapshotHistory[]>([]);
   const [detail, setDetail] = useState<SourceSnapshotDetail | null>(null);
   const [job, setJob] = useState<ProductionJob | null>(null);
   const [loading, setLoading] = useState(false);
@@ -138,6 +145,8 @@ export const SourceSnapshotsPanel: React.FC<SourceSnapshotsPanelProps> = ({
               <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">{new Date(snapshot.fetched_at).toLocaleString()}</p><p className="mt-1 text-xs text-slate-500">{snapshot.content_type} · {snapshot.byte_length.toLocaleString()} bytes · HTTP {snapshot.http_status}</p></div><button type="button" onClick={() => viewDetail(snapshot)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-indigo-300 hover:bg-slate-900">Inspect stored body</button></div>
               <a href={snapshot.final_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-full items-center gap-1 break-all text-xs text-cyan-400">{snapshot.final_url}<ExternalLink className="h-3 w-3 shrink-0" /></a>
               <p className="mt-3 truncate font-mono text-[10px] text-slate-600">SHA-256 {snapshot.content_sha256}</p>
+              <p className="mt-2 text-xs text-indigo-200">{CHANGE_LABELS[snapshot.change_status]}</p>
+              {snapshot.baseline_snapshot_id ? <p className="mt-1 break-all text-[10px] text-slate-500">Compared with retained capture {snapshot.baseline_snapshot_id}</p> : null}
               <p className="mt-1 text-[10px] text-slate-600">Retained until {new Date(snapshot.retention_expires_at).toLocaleString()}</p>
             </article>)}
           </div>
