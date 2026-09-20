@@ -223,6 +223,19 @@ export const ProductionApp: React.FC = () => {
                       </div>
                     )}
                     <p className="mt-4 truncate font-mono text-[10px] text-slate-600">SHA-256 {observation.content_hash}</p>
+                    <details className="mt-4 text-xs text-slate-400">
+                      <summary className="cursor-pointer">Source versions available at collection start</summary>
+                      {observation.snapshot_context ? <div className="mt-2 space-y-2">
+                        <p>Recorded {new Date(observation.snapshot_context.selected_at).toLocaleString()}. These references show available source versions; they do not establish which content the provider read.</p>
+                        {observation.snapshot_context.snapshots.length === 0 ? <p>No eligible retained source snapshots were available.</p> : null}
+                        {observation.snapshot_context.truncated ? <p>Showing the first {observation.snapshot_context.selection_limit} sources; additional sources were omitted.</p> : null}
+                        {observation.snapshot_context.snapshots.map((reference) => <div key={reference.snapshot_id} className="rounded-lg border border-slate-800 p-2">
+                          <p className="break-all">Snapshot {reference.snapshot_id}</p>
+                          <p>Captured {new Date(reference.fetched_at).toLocaleString()} · body retention ends {new Date(reference.retention_expires_at).toLocaleString()}</p>
+                          <p className="break-all font-mono">SHA-256 {reference.content_sha256}</p>
+                        </div>)}
+                      </div> : <p className="mt-2">Source version context was not recorded for this observation.</p>}
+                    </details>
                   </article>
                 ))}
               </div>

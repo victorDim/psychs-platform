@@ -78,6 +78,20 @@ export interface EvidenceObservation {
   model_identifier: string;
   provider_request_id?: string;
   collection_job_id?: string;
+  snapshot_context?: {
+    version: 1;
+    relationship: 'available_at_collection_start';
+    selected_at: string;
+    selection_limit: number;
+    truncated: boolean;
+    snapshots: {
+      source_id: string;
+      snapshot_id: string;
+      content_sha256: string;
+      fetched_at: string;
+      retention_expires_at: string;
+    }[];
+  } | null;
   prompt_text: string;
   response_text: string;
   citations: string[];

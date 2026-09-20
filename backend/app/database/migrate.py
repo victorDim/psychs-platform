@@ -173,7 +173,8 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
                 )
             )
             cursor.execute(
-                sql.SQL("GRANT SELECT (id, collection_job_id, content_sha256) ON source_snapshots TO {}").format(
+                sql.SQL("GRANT SELECT (id, collection_job_id, content_sha256, tenant_id, project_id, "
+                        "source_id, fetched_at, retention_expires_at) ON source_snapshots TO {}").format(
                     sql.Identifier(role)
                 )
             )

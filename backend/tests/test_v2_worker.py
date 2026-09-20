@@ -5,6 +5,7 @@ import pytest
 from app.v2.worker import ClaimedJob, WorkerSettings, _safe_job_error, retry_delay_seconds
 from uuid import uuid4
 from unittest.mock import MagicMock
+from datetime import datetime, timezone
 
 
 def test_disabled_snapshot_feature_does_not_schedule_or_connect(monkeypatch):
@@ -35,6 +36,28 @@ def test_daily_job_rechecks_withdrawn_policy_before_network_access():
     with pytest.raises(SourceSnapshotPermanentError, match="withdrawn"):
         execute_source_snapshot(connection, job, WorkerSettings("unused", "test"), fetcher=fetcher)
     fetcher.assert_not_called()
+
+
+def test_evidence_snapshot_context_is_bounded_and_explicit_about_relationship():
+    from app.v2.worker import select_evidence_snapshot_context
+
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    now = datetime.now(timezone.utc)
+    rows = [{"source_id": uuid4(), "snapshot_id": uuid4(), "content_sha256": "a" * 64,
+             "fetched_at": now, "retention_expires_at": now} for _ in range(101)]
+    cursor.fetchall.return_value = rows
+    identifier = uuid4()
+    job = ClaimedJob(identifier, identifier, identifier, identifier, "evidence_collection", {}, 1, 3)
+    context = select_evidence_snapshot_context(connection, job)
+    assert context["relationship"] == "available_at_collection_start"
+    assert context["truncated"] is True
+    assert len(context["snapshots"]) == context["selection_limit"] == 100
+    assert context["snapshots"][0]["snapshot_id"] == str(rows[0]["snapshot_id"])
+    cursor.fetchall.return_value = []
+    empty = select_evidence_snapshot_context(connection, job)
+    assert empty["snapshots"] == []
+    assert empty["truncated"] is False
 
 
 def test_retry_delay_is_exponential_and_capped():

@@ -310,6 +310,7 @@ class EvidenceObservation(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     collection_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    snapshot_context: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
     retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

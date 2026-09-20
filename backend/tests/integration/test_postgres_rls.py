@@ -1,6 +1,8 @@
 """Live PostgreSQL tests for the tenant-isolation security boundary."""
 
 import os
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
@@ -757,6 +759,55 @@ def test_worker_captures_verified_source_once_with_immutable_provenance():
     assert calls == 1
     assert repeated["snapshot_id"] == first["snapshot_id"]
     assert repeated["deduplicated"] is True
+    evidence_job_id = uuid4()
+    with psycopg.connect(OWNER_URL) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO jobs (id, tenant_id, project_id, job_type, payload,
+                   idempotency_key, request_hash, created_by)
+               VALUES (%s, %s, %s, 'evidence_collection', '{}'::jsonb, %s, repeat('b', 64), %s)""",
+            (evidence_job_id, tenant, project, str(evidence_job_id), user),
+        )
+    evidence_job = ClaimedJob(evidence_job_id, tenant, project, user, "evidence_collection",
+                              {"prompt": "What does Example make?"}, 1, 3)
+    with psycopg.connect(WORKER_URL) as connection:
+        collected = execute_evidence_collection(
+            connection, evidence_job, settings,
+            collector=lambda **kwargs: ObservedProviderResponse(
+                provider="openai", model_identifier="test", provider_request_id=str(evidence_job_id),
+                response_text="Observed test response", citations=(),
+            ),
+        )
+        wrong_project_job = ClaimedJob(uuid4(), tenant, uuid4(), user, "evidence_collection", {}, 1, 3)
+        assert v2_worker.select_evidence_snapshot_context(connection, wrong_project_job)["snapshots"] == []
+        wrong_tenant_job = ClaimedJob(uuid4(), other_tenant, project, user, "evidence_collection", {}, 1, 3)
+        assert v2_worker.select_evidence_snapshot_context(connection, wrong_tenant_job)["snapshots"] == []
+    with psycopg.connect(OWNER_URL) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT snapshot_context FROM evidence_observations WHERE id = %s",
+            (collected["observation_id"],),
+        )
+        context = cursor.fetchone()[0]
+        assert context["relationship"] == "available_at_collection_start"
+        assert context["snapshots"][0]["snapshot_id"] == first["snapshot_id"]
+        assert context["snapshots"][0]["content_sha256"] == first["content_sha256"]
+        assert context["truncated"] is False
+        cursor.execute(
+            "SELECT observed_at, content_hash FROM evidence_observations WHERE id = %s",
+            (collected["observation_id"],),
+        )
+        observed_at, content_hash = cursor.fetchone()
+        canonical = {
+            "evidence_class": "observed", "project_id": str(project), "provider": "openai",
+            "model_identifier": "test", "provider_request_id": str(evidence_job_id),
+            "prompt_text": "What does Example make?", "response_text": "Observed test response",
+            "citations": [], "observed_at": observed_at.isoformat(),
+            "collection_job_id": str(evidence_job_id), "snapshot_context": context,
+        }
+        assert hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == content_hash
+        with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+            with connection.transaction():
+                cursor.execute("UPDATE evidence_observations SET snapshot_context = NULL WHERE id = %s",
+                               (collected["observation_id"],))
     with psycopg.connect(APP_URL) as connection:
         with connection.cursor() as cursor:
             _set_tenant(cursor, tenant)

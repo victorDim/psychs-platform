@@ -286,6 +286,23 @@ class EvidenceCollectionCreate(BaseModel):
         return value
 
 
+class EvidenceSnapshotReference(BaseModel):
+    source_id: UUID
+    snapshot_id: UUID
+    content_sha256: str
+    fetched_at: datetime
+    retention_expires_at: datetime
+
+
+class EvidenceSnapshotContext(BaseModel):
+    version: Literal[1]
+    relationship: Literal["available_at_collection_start"]
+    selected_at: datetime
+    selection_limit: int
+    truncated: bool
+    snapshots: list[EvidenceSnapshotReference]
+
+
 class EvidenceObservationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -296,6 +313,7 @@ class EvidenceObservationResponse(BaseModel):
     model_identifier: str
     provider_request_id: Optional[str]
     collection_job_id: Optional[UUID]
+    snapshot_context: Optional[EvidenceSnapshotContext] = None
     prompt_text: str
     response_text: str
     citations: list[str]

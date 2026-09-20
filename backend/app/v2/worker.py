@@ -487,6 +487,42 @@ def execute_domain_verification(connection: psycopg.Connection, job: ClaimedJob)
     return {"challenge_id": str(challenge_id), "status": "verified"}
 
 
+def select_evidence_snapshot_context(connection: psycopg.Connection, job: ClaimedJob) -> dict:
+    """Capture available source versions, without asserting provider consumption."""
+    selected_at = datetime.now(timezone.utc)
+    selection_limit = 100
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """SELECT DISTINCT ON (snapshot.source_id)
+                      snapshot.source_id, snapshot.id AS snapshot_id,
+                      snapshot.content_sha256, snapshot.fetched_at, snapshot.retention_expires_at
+               FROM source_snapshots AS snapshot
+               JOIN authoritative_sources AS source
+                 ON source.tenant_id = snapshot.tenant_id
+                AND source.project_id = snapshot.project_id AND source.id = snapshot.source_id
+               WHERE snapshot.tenant_id = %s AND snapshot.project_id = %s
+                 AND source.verification_status = 'verified'
+                 AND snapshot.fetched_at <= %s AND snapshot.retention_expires_at > %s
+               ORDER BY snapshot.source_id, snapshot.fetched_at DESC, snapshot.id DESC
+               LIMIT %s""",
+            (job.tenant_id, job.project_id, selected_at, selected_at, selection_limit + 1),
+        )
+        rows = cursor.fetchall()
+    return {
+        "version": 1,
+        "relationship": "available_at_collection_start",
+        "selected_at": selected_at.isoformat(),
+        "selection_limit": selection_limit,
+        "truncated": len(rows) > selection_limit,
+        "snapshots": [
+            {"source_id": str(row["source_id"]), "snapshot_id": str(row["snapshot_id"]),
+             "content_sha256": row["content_sha256"], "fetched_at": row["fetched_at"].isoformat(),
+             "retention_expires_at": row["retention_expires_at"].isoformat()}
+            for row in rows[:selection_limit]
+        ],
+    }
+
+
 def execute_evidence_collection(
     connection: psycopg.Connection,
     job: ClaimedJob,
@@ -506,6 +542,7 @@ def execute_evidence_collection(
     if existing:
         return {"observation_id": str(existing[0]), "provider": "openai", "deduplicated": True}
 
+    snapshot_context = select_evidence_snapshot_context(connection, job)
     try:
         observed: ObservedProviderResponse = collector(
             api_key=settings.openai_api_key,
@@ -529,6 +566,7 @@ def execute_evidence_collection(
         "citations": list(observed.citations),
         "observed_at": observed_at.isoformat(),
         "collection_job_id": str(job.id),
+        "snapshot_context": snapshot_context,
     }
     content_hash = hashlib.sha256(
         json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -541,10 +579,10 @@ def execute_evidence_collection(
                 id, tenant_id, project_id, evidence_class, provider, model_identifier,
                 provider_request_id, prompt_text, response_text, citations, observed_at,
                 content_hash, idempotency_key, request_hash, collected_by,
-                collection_job_id, retention_expires_at
+                collection_job_id, snapshot_context, retention_expires_at
             ) VALUES (
                 %s, %s, %s, 'observed', %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, now() + make_interval(days => %s)
+                %s, %s, %s, %s, %s, %s, now() + make_interval(days => %s)
             )
             """,
             (
@@ -563,6 +601,7 @@ def execute_evidence_collection(
                 content_hash,
                 job.created_by,
                 job.id,
+                Jsonb(snapshot_context),
                 settings.evidence_retention_days,
             ),
         )
