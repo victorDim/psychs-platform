@@ -623,6 +623,8 @@ def execute_source_snapshot(
         raise SourceSnapshotPermanentError("Authoritative source is not verified")
     if source["snapshot_policy"] == "disabled":
         raise SourceSnapshotPermanentError("Snapshots are disabled for this source")
+    if job.payload.get("trigger") == "daily" and source["snapshot_policy"] != "daily":
+        raise SourceSnapshotPermanentError("Daily capture policy has been withdrawn")
 
     try:
         response = fetcher(
@@ -755,6 +757,16 @@ def purge_expired_source_snapshots(settings: WorkerSettings) -> int:
             return sum(row[0] for row in cursor.fetchall())
 
 
+def schedule_daily_source_snapshots(settings: WorkerSettings) -> int:
+    """Queue at most 100 daily captures; the database enforces tenant quotas."""
+    if not settings.source_snapshots_enabled:
+        return 0
+    with psycopg.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT schedule_daily_source_snapshots(%s)", (100,))
+            return cursor.fetchone()[0]
+
+
 def main() -> None:
     settings = WorkerSettings.from_environment()
     global LOGGER
@@ -768,6 +780,7 @@ def main() -> None:
     )
     stopping = False
     next_retention_cleanup = time.monotonic()
+    next_source_schedule = time.monotonic()
 
     def request_stop(_signum, _frame) -> None:
         nonlocal stopping
@@ -780,6 +793,16 @@ def main() -> None:
         while not stopping:
             try:
                 now = time.monotonic()
+                if now >= next_source_schedule:
+                    next_source_schedule = now + 60
+                    # A scheduling outage must not prevent already queued work.
+                    try:
+                        scheduled = schedule_daily_source_snapshots(settings)
+                        if scheduled:
+                            LOGGER.info("Daily source captures queued: %s", scheduled)
+                    except Exception:
+                        record_worker_loop_failure()
+                        LOGGER.exception("source_schedule_failed")
                 if now >= next_retention_cleanup:
                     # Schedule the next attempt before I/O so an outage cannot create
                     # a tight retry loop across every worker replica.

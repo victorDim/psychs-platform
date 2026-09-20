@@ -4,6 +4,37 @@ import pytest
 
 from app.v2.worker import ClaimedJob, WorkerSettings, _safe_job_error, retry_delay_seconds
 from uuid import uuid4
+from unittest.mock import MagicMock
+
+
+def test_disabled_snapshot_feature_does_not_schedule_or_connect(monkeypatch):
+    from app.v2 import worker
+
+    def unexpected_connection(*args, **kwargs):
+        raise AssertionError("Disabled scheduler attempted database access")
+
+    monkeypatch.setattr(worker.psycopg, "connect", unexpected_connection)
+    settings = WorkerSettings(database_url="unused", worker_id="test", source_snapshots_enabled=False)
+    assert worker.schedule_daily_source_snapshots(settings) == 0
+
+
+def test_daily_job_rechecks_withdrawn_policy_before_network_access():
+    from app.v2.worker import execute_source_snapshot
+    from app.v2.source_snapshot import SourceSnapshotPermanentError
+
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [None, {
+        "canonical_url": "https://example.com/", "verification_status": "verified",
+        "snapshot_policy": "manual",
+    }]
+    identifier = uuid4()
+    job = ClaimedJob(identifier, identifier, identifier, identifier, "source_snapshot",
+                     {"source_id": str(identifier), "trigger": "daily"}, 1, 3)
+    fetcher = MagicMock()
+    with pytest.raises(SourceSnapshotPermanentError, match="withdrawn"):
+        execute_source_snapshot(connection, job, WorkerSettings("unused", "test"), fetcher=fetcher)
+    fetcher.assert_not_called()
 
 
 def test_retry_delay_is_exponential_and_capped():

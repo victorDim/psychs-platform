@@ -24,8 +24,18 @@ from app.v2.routes import (
     EvidenceObservationCreate,
     ProjectCreate,
     TokenRevocationCreate,
+    SourceSnapshotPolicyUpdate,
 )
 from app.v2.settings import V2Settings
+
+
+def test_source_capture_policy_rejects_unsupported_modes_and_tenant_override():
+    for policy in ("daily", "manual", "disabled"):
+        assert SourceSnapshotPolicyUpdate(snapshot_policy=policy).snapshot_policy == policy
+    with pytest.raises(ValidationError):
+        SourceSnapshotPolicyUpdate(snapshot_policy="on_collection")
+    with pytest.raises(ValidationError):
+        SourceSnapshotPolicyUpdate(snapshot_policy="daily", tenant_id=str(uuid4()))
 
 
 class _SigningKey:

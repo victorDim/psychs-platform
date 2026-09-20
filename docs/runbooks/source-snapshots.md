@@ -6,6 +6,10 @@ The capture history compares each snapshot with the preceding retained snapshot 
 
 ## Staging enablement
 
+Daily policy is opt-in per source. With the snapshot feature enabled, workers check every 60 seconds and enqueue up to 100 jobs per pass. Each active tenant is capped at 30 scheduled captures per UTC calendar day; tenants with more daily sources should reduce their daily selections to this limit. A source gets at most one scheduled job per UTC day, including failed or cancelled jobs, and an existing active capture postpones scheduling. Missed days are not backfilled. Manual capture remains subject to the API rate limit. Disable a source or change it to manual to stop future daily fetches; already started network requests may finish.
+
+Apply migration `0011_daily_source_captures` and reprovision worker grants before upgrading workers. The worker receives execution permission on a bounded scheduling function, not general job insertion privileges. Enqueue and audit insertion occur atomically. The default feature gate remains off.
+
 1. Apply migration `0010_source_snapshots` and rerun role provisioning. Do not grant the API role direct mutation access to either snapshot table.
 2. Restrict worker egress at the infrastructure boundary to public TCP ports 80 and 443 plus the approved DNS resolver. Deny cloud metadata, RFC1918, loopback, link-local, multicast, and internal service networks.
 3. Set `PSYCHS_SOURCE_SNAPSHOTS_ENABLED=true` on both API and worker. Configure the rate, timeout, maximum bytes, and retention values from `.env.example`.

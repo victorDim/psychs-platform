@@ -1,6 +1,7 @@
 """Live PostgreSQL tests for the tenant-isolation security boundary."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import psycopg
@@ -62,6 +63,69 @@ def _seed_two_tenants():
 
 def _set_tenant(cursor, tenant_id):
     cursor.execute("SELECT set_config('app.current_tenant_id', %s, true)", (str(tenant_id),))
+
+
+def test_daily_scheduler_is_bounded_audited_and_safe_across_replicas():
+    if not WORKER_URL:
+        pytest.skip("Worker PostgreSQL URL is not configured")
+    tenant, _, user, _ = _seed_two_tenants()
+    project = uuid4()
+    eligible = [uuid4() for _ in range(32)]
+    ineligible = [uuid4() for _ in range(3)]
+    with psycopg.connect(OWNER_URL) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO projects (id, tenant_id, slug, name, canonical_domain, created_by,
+                   domain_verification_status, domain_verified_at)
+               VALUES (%s, %s, %s, 'Daily project', 'example.com', %s, 'verified', now())""",
+            (project, tenant, f"daily-{project.hex[:8]}", user),
+        )
+        cursor.executemany(
+            """INSERT INTO authoritative_sources
+                   (id, tenant_id, project_id, canonical_url, source_type, owner_label,
+                    verification_status, snapshot_policy, created_by)
+               VALUES (%s, %s, %s, %s, 'website', 'Daily source', %s, %s, %s)""",
+            [(identifier, tenant, project, f"https://example.com/{identifier}", verified, policy, user)
+             for identifier, verified, policy in (
+                 [(identifier, 'verified', 'daily') for identifier in eligible]
+                 + [(ineligible[0], 'unverified', 'daily'),
+                    (ineligible[1], 'verified', 'manual'),
+                    (ineligible[2], 'verified', 'disabled')]
+             )],
+        )
+
+    def schedule():
+        with psycopg.connect(WORKER_URL) as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT schedule_daily_source_snapshots(100)")
+            return cursor.fetchone()[0]
+
+    with ThreadPoolExecutor(max_workers=2) as replicas:
+        list(replicas.map(lambda _: schedule(), range(2)))
+    schedule()  # Restart/repeated polling must not create another daily batch.
+    with psycopg.connect(OWNER_URL) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT id, payload, idempotency_key FROM jobs WHERE tenant_id = %s", (tenant,))
+        jobs = cursor.fetchall()
+        assert len(jobs) == 30
+        assert len({key for _, _, key in jobs}) == 30
+        assert all(payload['source_id'] in {str(identifier) for identifier in eligible}
+                   and payload['trigger'] == 'daily' for _, payload, _ in jobs)
+        cursor.execute("SELECT count(*) FROM audit_events WHERE tenant_id = %s AND action = 'job.scheduled'", (tenant,))
+        assert cursor.fetchone()[0] == 30
+        # Terminal jobs have scrubbed payloads; the daily key still prevents re-enqueue.
+        cursor.execute("UPDATE jobs SET status = 'cancelled', payload = '{}'::jsonb WHERE tenant_id = %s", (tenant,))
+    schedule()
+    with psycopg.connect(OWNER_URL) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM jobs WHERE tenant_id = %s", (tenant,))
+        assert cursor.fetchone()[0] == 30
+    with psycopg.connect(APP_URL) as connection, connection.cursor() as cursor:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with connection.transaction():
+                cursor.execute("SELECT schedule_daily_source_snapshots(100)")
+    with psycopg.connect(WORKER_URL) as connection, connection.cursor() as cursor:
+        with pytest.raises(psycopg.errors.RaiseException, match="batch limit"):
+            with connection.transaction():
+                cursor.execute("SELECT schedule_daily_source_snapshots(101)")
+        cursor.execute("SELECT has_table_privilege(current_user, 'jobs', 'INSERT')")
+        assert cursor.fetchone()[0] is False
 
 
 def test_first_tenant_bootstrap_is_idempotent_and_audited():

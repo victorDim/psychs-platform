@@ -126,6 +126,11 @@ class AuthoritativeSourceResponse(BaseModel):
     updated_at: datetime
 
 
+class SourceSnapshotPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    snapshot_policy: Literal["manual", "daily", "disabled"]
+
+
 class DomainVerificationChallengeResponse(BaseModel):
     challenge_id: UUID = Field(validation_alias="id")
     domain: str
@@ -532,6 +537,34 @@ async def _tenant_source(
     ).scalar_one_or_none()
     if source is None:
         raise HTTPException(status_code=404, detail="Authoritative source not found")
+    return source
+
+
+@router.patch(
+    "/projects/{project_id}/sources/{source_id}/snapshot-policy",
+    response_model=AuthoritativeSourceResponse,
+)
+async def update_source_snapshot_policy(
+    project_id: UUID,
+    source_id: UUID,
+    command: SourceSnapshotPolicyUpdate,
+    context: RequestContext = Depends(require_permission(WRITE_PROJECTS, human_only=True)),
+    session: AsyncSession = Depends(get_session),
+):
+    source = await _tenant_source(session, context, project_id, source_id)
+    await session.refresh(source, with_for_update=True)
+    previous = source.snapshot_policy
+    if previous == command.snapshot_policy:
+        return source
+    source.snapshot_policy = command.snapshot_policy
+    session.add(AuditEvent(
+        tenant_id=context.tenant_id, actor_user_id=context.principal_id,
+        request_id=context.request_id, action="source.snapshot_policy_changed",
+        resource_type="authoritative_source", resource_id=source.id,
+        payload={"previous": previous, "current": source.snapshot_policy},
+    ))
+    await session.flush()
+    await session.refresh(source)
     return source
 
 

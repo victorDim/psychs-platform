@@ -168,6 +168,11 @@ def provision_worker_role(owner_url: str, role: str, password: str) -> None:
             )
             cursor.execute(sql.SQL("GRANT INSERT ON source_snapshots TO {}").format(sql.Identifier(role)))
             cursor.execute(
+                sql.SQL("GRANT EXECUTE ON FUNCTION schedule_daily_source_snapshots(INTEGER) TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            cursor.execute(
                 sql.SQL("GRANT SELECT (id, collection_job_id, content_sha256) ON source_snapshots TO {}").format(
                     sql.Identifier(role)
                 )

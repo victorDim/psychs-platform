@@ -29,6 +29,8 @@ export const ProductionApp: React.FC = () => {
   const [url, setUrl] = useState('');
   const [owner, setOwner] = useState('');
   const [saving, setSaving] = useState(false);
+  const [snapshotPolicy, setSnapshotPolicy] = useState<'manual' | 'daily'>('manual');
+  const [updatingPolicy, setUpdatingPolicy] = useState<string | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const canWriteProjects = user.scopes.includes('projects:write');
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
@@ -93,7 +95,7 @@ export const ProductionApp: React.FC = () => {
         canonical_url: url,
         source_type: 'website',
         owner_label: owner,
-        snapshot_policy: 'on_collection',
+        snapshot_policy: snapshotPolicy,
       });
       setUrl('');
       setOwner('');
@@ -102,6 +104,19 @@ export const ProductionApp: React.FC = () => {
       setError(reason instanceof Error ? reason.message : 'Unable to register source');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const updateSnapshotPolicy = async (source: AuthoritativeSource, policy: 'manual' | 'daily' | 'disabled') => {
+    setUpdatingPolicy(source.id);
+    setError(null);
+    try {
+      const updated = await v2Api.updateSnapshotPolicy(source.project_id, source.id, policy);
+      setSources((current) => current.map((record) => record.id === updated.id ? updated : record));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to update capture policy');
+    } finally {
+      setUpdatingPolicy(null);
     }
   };
 
@@ -158,12 +173,20 @@ export const ProductionApp: React.FC = () => {
                       <span className="rounded-full border border-amber-800 px-2 py-1 text-[10px] uppercase text-amber-300">{source.verification_status}</span>
                     </div>
                     <a href={source.canonical_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 break-all text-sm text-cyan-400 hover:text-cyan-300">{source.canonical_url}<ExternalLink className="h-3 w-3 shrink-0" /></a>
+                    {canWriteProjects ? <label className="mt-3 block text-xs text-slate-400">Capture policy
+                      <select value={source.snapshot_policy} disabled={updatingPolicy !== null} onChange={(event) => void updateSnapshotPolicy(source, event.target.value as 'manual' | 'daily' | 'disabled')} className="ml-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        {source.snapshot_policy === 'on_collection' ? <option value="on_collection" disabled>On collection (pending implementation)</option> : null}
+                        <option value="manual">Manual</option><option value="daily">Daily (UTC)</option><option value="disabled">Disabled</option>
+                      </select>
+                    </label> : null}
                   </article>
                 ))}
               </div>
               </section>
               {canWriteProjects ? <form onSubmit={addSource} className="h-fit rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
               <h2 className="mb-4 flex items-center gap-2 font-semibold"><Plus className="h-4 w-4" /> Register source</h2>
+              <label className="mb-4 block text-xs text-slate-400">Capture policy<select value={snapshotPolicy} onChange={(event) => setSnapshotPolicy(event.target.value as 'manual' | 'daily')} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"><option value="manual">Manual</option><option value="daily">Daily (UTC)</option></select></label>
+              <p className="mb-4 text-xs text-slate-500">Daily capture starts after domain verification and requires capture to be enabled by your operator. Up to 30 scheduled captures per workspace per UTC day.</p>
               <label className="mb-4 block text-xs text-slate-400">Public HTTP(S) URL<input required type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/docs" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
               <label className="mb-5 block text-xs text-slate-400">Owner label<input required value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Product documentation" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white" /></label>
               <button disabled={saving} className="w-full rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{saving ? 'Registering…' : 'Register authoritative source'}</button>

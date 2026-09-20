@@ -175,6 +175,11 @@ export const v2Api = {
       body: JSON.stringify({ prompt }),
     }),
   getJob: (jobId: string) => request<ProductionJob>(`/jobs/${encodeURIComponent(jobId)}`),
+  updateSnapshotPolicy: (projectId: string, sourceId: string, snapshotPolicy: 'manual' | 'daily' | 'disabled') =>
+    request<AuthoritativeSource>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshot-policy`, {
+      method: 'PATCH',
+      body: JSON.stringify({ snapshot_policy: snapshotPolicy }),
+    }),
   enqueueSourceSnapshot: (projectId: string, sourceId: string) =>
     request<ProductionJob>(`/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(sourceId)}/snapshot-jobs`, {
       method: 'POST',
