@@ -152,6 +152,12 @@ def resolve_public_target(url: str) -> ResolvedPublicTarget:
     than resolving ``hostname`` again. This removes the DNS-rebinding window
     between validation and connection establishment.
     """
+    # Fetch targets must be absolute URLs, not the shorthand accepted for display validation.
+    if len(url) > 2048 or "\\" in url or any(ord(character) <= 32 or ord(character) == 127 for character in url):
+        raise ValueError("Public source URL contains invalid characters or exceeds the length limit")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.fragment:
+        raise ValueError("Public source requires an absolute HTTP(S) URL without a fragment")
     syntax_safe, syntax_reason = validate_public_url_syntax(url)
     if not syntax_safe:
         raise ValueError(syntax_reason)

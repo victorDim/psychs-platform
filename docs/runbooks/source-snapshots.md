@@ -25,6 +25,8 @@ Apply migration `0011_daily_source_captures` and reprovision worker grants befor
 
 ## Incident response
 
+The fetcher requests identity encoding and accepts declared HTML, XHTML, or plain text. Compressed responses, malformed encodings, embedded null characters, truncated declared bodies, and HTTPS-to-HTTP redirects are rejected. Body reads recheck the elapsed deadline between available chunks. DNS resolution and HTTP header parsing still rely on the operating system and socket timeouts; this is not a hard process-wide deadline. Enforce resolver and outbound connection limits in the worker environment before production rollout.
+
 - Disable `PSYCHS_SOURCE_SNAPSHOTS_ENABLED` on the API first to stop new jobs, then on workers after in-flight jobs settle.
 - Preserve job attempts, dead letters, audit events, snapshot hashes, and retention receipts. Never copy stored bodies into tickets or logs.
 - If an internal-network request is suspected, isolate worker egress, rotate any potentially exposed service credentials, and inspect DNS, proxy, and network-flow logs before reenabling the feature.

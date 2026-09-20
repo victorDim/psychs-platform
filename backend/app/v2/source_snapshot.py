@@ -40,7 +40,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         raw_socket = socket.create_connection((self._address, self.port), self.timeout)
-        self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+        try:
+            self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+        except Exception:
+            raw_socket.close()
+            raise
 
 
 def _request_once(url: str, timeout_seconds: float):
@@ -57,17 +61,21 @@ def _request_once(url: str, timeout_seconds: float):
     default_port = 443 if parsed.scheme == "https" else 80
     display_host = f"[{target.hostname}]" if ":" in target.hostname else target.hostname
     host_header = display_host if target.port == default_port else f"{display_host}:{target.port}"
-    connection.request(
-        "GET",
-        path,
-        headers={
-            "Host": host_header,
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9",
-            "User-Agent": "Psychs-Source-Snapshot/2.0 (+https://psychs.ai/crawler)",
-            "Connection": "close",
-        },
-    )
-    return connection, connection.getresponse()
+    try:
+        connection.request(
+            "GET", path,
+            headers={
+                "Host": host_header,
+                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9",
+                "Accept-Encoding": "identity",
+                "User-Agent": "Psychs-Source-Snapshot/2.0 (+https://psychs.ai/crawler)",
+                "Connection": "close",
+            },
+        )
+        return connection, connection.getresponse()
+    except Exception:
+        connection.close()
+        raise
 
 
 def fetch_source_snapshot(
@@ -93,19 +101,26 @@ def fetch_source_snapshot(
                     location = response.getheader("Location", "").strip()
                     if not location:
                         raise SourceSnapshotPermanentError("Source redirect omitted Location")
-                    current_url = urljoin(current_url, location)
+                    redirect_url = urljoin(current_url, location)
+                    if urlsplit(current_url).scheme == "https" and urlsplit(redirect_url).scheme != "https":
+                        raise SourceSnapshotPermanentError("Source redirect would downgrade HTTPS")
+                    current_url = redirect_url
                     continue
                 if response.status == 429 or 500 <= response.status <= 599:
                     raise SourceSnapshotTemporaryError(f"Source returned HTTP {response.status}")
                 if not 200 <= response.status <= 299:
                     raise SourceSnapshotPermanentError(f"Source returned HTTP {response.status}")
-                content_type_header = response.getheader("Content-Type", "text/plain")
+                content_type_header = response.getheader("Content-Type", "")
                 content_type = content_type_header.split(";", 1)[0].strip().lower()
                 if content_type not in ALLOWED_CONTENT_TYPES:
                     raise SourceSnapshotPermanentError("Source content type is not permitted")
+                if response.getheader("Content-Encoding", "identity").strip().lower() not in {"", "identity"}:
+                    raise SourceSnapshotPermanentError("Encoded source responses are not permitted")
                 content_length = response.getheader("Content-Length")
                 if content_length:
                     try:
+                        if not content_length.isascii() or not content_length.isdigit():
+                            raise ValueError("Invalid length")
                         if int(content_length) > max_bytes:
                             raise SourceSnapshotPermanentError("Source response exceeds the byte limit")
                     except ValueError as exc:
@@ -118,7 +133,9 @@ def fetch_source_snapshot(
                         raise SourceSnapshotTemporaryError("Public source request timed out")
                     if connection.sock is not None:
                         connection.sock.settimeout(remaining_seconds)
-                    chunk = response.read(min(65_536, max_bytes + 1 - body_length))
+                    # read() may wait for a whole chunk while a peer trickles bytes.
+                    # read1() returns buffered/available data so the deadline is rechecked.
+                    chunk = response.read1(min(65_536, max_bytes + 1 - body_length))
                     if not chunk:
                         break
                     body_parts.append(chunk)
@@ -126,15 +143,23 @@ def fetch_source_snapshot(
                 body = b"".join(body_parts)
                 if len(body) > max_bytes:
                     raise SourceSnapshotPermanentError("Source response exceeds the byte limit")
+                if content_length and len(body) != int(content_length):
+                    raise SourceSnapshotTemporaryError("Source response ended before its declared length")
                 charset = "utf-8"
                 for parameter in content_type_header.split(";")[1:]:
                     name, separator, value = parameter.strip().partition("=")
                     if separator and name.lower() == "charset":
                         charset = value.strip(' "').lower() or "utf-8"
+                if len(charset) > 64:
+                    raise SourceSnapshotPermanentError("Source declared an invalid charset")
                 try:
-                    body.decode(charset)
+                    decoded = body.decode(charset)
                 except LookupError as exc:
                     raise SourceSnapshotPermanentError("Source declared an unknown charset") from exc
+                except UnicodeError as exc:
+                    raise SourceSnapshotPermanentError("Source body does not match its declared charset") from exc
+                if "\x00" in decoded or len(decoded.encode("utf-8")) > 5_242_880:
+                    raise SourceSnapshotPermanentError("Decoded source body exceeds storage policy")
                 return SourceSnapshotResponse(url, current_url, response.status, content_type, charset, body)
             finally:
                 response.close()
@@ -144,7 +169,7 @@ def fetch_source_snapshot(
     except SourceSnapshotTemporaryError:
         raise
     except ValueError as exc:
-        raise SourceSnapshotPermanentError(str(exc)) from exc
+        raise SourceSnapshotPermanentError("Source URL or response failed validation") from exc
     except (OSError, socket.timeout, TimeoutError, http.client.HTTPException, ssl.SSLError) as exc:
         raise SourceSnapshotTemporaryError("Public source request failed") from exc
     raise SourceSnapshotPermanentError("Source redirect limit exceeded")

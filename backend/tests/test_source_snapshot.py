@@ -4,7 +4,7 @@ import socket
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -103,7 +103,7 @@ class _Response:
     def getheader(self, name, default=None):
         return self._headers.get(name, default)
 
-    def read(self, amount):
+    def read1(self, amount):
         chunk = self._body[self._offset:self._offset + amount]
         self._offset += len(chunk)
         return chunk
@@ -190,3 +190,92 @@ def test_snapshot_classifies_retryable_and_policy_failures(monkeypatch, response
     monkeypatch.setattr(source_snapshot, "_request_once", lambda *args: (_Connection(), response))
     with pytest.raises(error_type):
         fetch_source_snapshot("https://example.com/", timeout_seconds=10, max_bytes=10)
+
+
+@pytest.mark.parametrize("url", [
+    "ftp://example.com/file", "example.com", "https://example.com/#fragment",
+    "https://example.com/\r\nsecret", "https://example.com/\\secret", "https://example.com/" + "x" * 2048,
+])
+def test_fetch_resolver_rejects_ambiguous_targets_before_dns(monkeypatch, url):
+    resolver = MagicMock(side_effect=AssertionError("Unsafe URL reached DNS"))
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+    with pytest.raises(ValueError):
+        resolve_public_target(url)
+    resolver.assert_not_called()
+
+
+@pytest.mark.parametrize("headers,body", [
+    ({"Content-Type": "text/plain; charset=utf-8"}, bytes([255]) + b"sensitive source fragment"),
+    ({"Content-Type": "text/plain"}, bytes([0])),
+    ({"Content-Type": "text/plain", "Content-Length": "-1"}, b"x"),
+    ({"Content-Type": "text/plain", "Content-Encoding": "gzip"}, b"compressed"),
+    ({"Server": "missing-content-type"}, b"x"),
+])
+def test_invalid_response_is_rejected_without_body_in_error(monkeypatch, headers, body):
+    connection, response = _Connection(), _Response(body=body, headers=headers)
+    monkeypatch.setattr(source_snapshot, "_request_once", lambda *args: (connection, response))
+    with pytest.raises(SourceSnapshotPermanentError) as error:
+        fetch_source_snapshot("https://example.com/", timeout_seconds=10, max_bytes=1024)
+    assert "sensitive source fragment" not in str(error.value)
+    assert response.closed and connection.closed
+
+
+def test_https_downgrade_is_rejected_without_second_request(monkeypatch):
+    requester = MagicMock(return_value=(_Connection(), _Response(status=302, headers={
+        "Location": "http://example.com/insecure",
+    })))
+    monkeypatch.setattr(source_snapshot, "_request_once", requester)
+    with pytest.raises(SourceSnapshotPermanentError, match="downgrade"):
+        fetch_source_snapshot("https://example.com/", timeout_seconds=10, max_bytes=1024)
+    assert requester.call_count == 1
+
+
+def test_truncated_content_length_is_retryable_not_saved_as_complete(monkeypatch):
+    response = _Response(body=b"short", headers={"Content-Type": "text/plain", "Content-Length": "20"})
+    monkeypatch.setattr(source_snapshot, "_request_once", lambda *args: (_Connection(), response))
+    with pytest.raises(SourceSnapshotTemporaryError, match="declared length"):
+        fetch_source_snapshot("https://example.com/", timeout_seconds=10, max_bytes=1024)
+
+
+def test_body_read_rechecks_deadline_between_available_chunks(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(source_snapshot.time, "monotonic", lambda: clock[0])
+    connection, response = _Connection(), _Response()
+    def trickle(amount):
+        clock[0] += 6
+        return b"x"
+    response.read1 = trickle
+    monkeypatch.setattr(source_snapshot, "_request_once", lambda *args: (connection, response))
+    with pytest.raises(SourceSnapshotTemporaryError, match="timed out"):
+        fetch_source_snapshot("https://example.com/", timeout_seconds=10, max_bytes=1024)
+    assert clock[0] == 12
+    assert response.closed and connection.closed
+
+
+def test_failed_http_request_closes_connection_and_preserves_host_header(monkeypatch):
+    monkeypatch.setattr(source_snapshot, "resolve_public_target", lambda url: SimpleNamespace(
+        hostname="example.com", port=80, addresses=("93.184.216.34",),
+    ))
+    connection = MagicMock()
+    connection.getresponse.side_effect = OSError("connection failed")
+    factory = MagicMock(return_value=connection)
+    monkeypatch.setattr(source_snapshot.http.client, "HTTPConnection", factory)
+    with pytest.raises(OSError):
+        source_snapshot._request_once("http://example.com/page", 5)
+    assert factory.call_args.args[0] == "93.184.216.34"
+    assert connection.request.call_args.kwargs["headers"]["Host"] == "example.com"
+    connection.close.assert_called_once()
+
+
+def test_tls_uses_original_hostname_and_closes_socket_on_handshake_failure(monkeypatch):
+    raw_socket, tls_context = MagicMock(), MagicMock()
+    tls_context.wrap_socket.side_effect = OSError("handshake failed")
+    monkeypatch.setattr(source_snapshot.ssl, "create_default_context", lambda: tls_context)
+    connect = MagicMock(return_value=raw_socket)
+    monkeypatch.setattr(source_snapshot.socket, "create_connection", connect)
+    connection = source_snapshot._PinnedHTTPSConnection("example.com", "93.184.216.34", 443, 5)
+    with pytest.raises(OSError):
+        connection.connect()
+    connect.assert_called_once_with(("93.184.216.34", 443), 5)
+    tls_context.wrap_socket.assert_called_once_with(raw_socket, server_hostname="example.com")
+    raw_socket.close.assert_called_once()
