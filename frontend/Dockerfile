@@ -31,7 +31,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production Nginx Server
-FROM nginxinc/nginx-unprivileged:1.30-alpine@sha256:daa17b944bac2b578e962da4c61ad72a59233b3c63abea17113acaf4e6b9aea4 AS runner
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af AS runner
 
 # Image assembly needs temporary root access to replace vendor-owned files.
 # Runtime drops back to the unprivileged nginx account below.
